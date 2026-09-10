@@ -1,0 +1,146 @@
+# ============================================================
+#  obsidian-epost-import — helt fristående compose-projekt
+# ============================================================
+#  Delar INGET med obsidian-nas-sync:
+#    - eget projektnamn (name: nedan)
+#    - eget bridge-nätverk (epost-import-net)
+#    - egna namngivna volymer (epost-import-*)
+#  Den headless Obsidian-containern ansluter till CouchDB via
+#  den publika URL:en https://obsidian.valfridsson.se (Cloudflare
+#  Tunnel) precis som vilken vanlig klientenhet som helst —
+#  konfigureras EN gång via webb-UI, se README.md.
+# ============================================================
+
+name: obsidian-epost-import
+
+services:
+  # ----------------------------------------------------------
+  #  Headless Obsidian (LinuxServer.io + Selkies-desktop)
+  #  Tunt lager: ./obsidian/Dockerfile lägger bara till ett
+  #  init-skript som förinstallerar Local REST API-pluginet.
+  # ----------------------------------------------------------
+  obsidian:
+    build:
+      context: ./obsidian
+      args:
+        # Pinnad LSIO-tagg. Nyare finns på:
+        # https://github.com/linuxserver/docker-obsidian/releases
+        OBSIDIAN_BASE_TAG: ${OBSIDIAN_BASE_TAG:-v1.13.7-ls144}
+    image: obsidian-epost-import/obsidian:latest
+    container_name: epost-import-obsidian
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/Stockholm}
+      TITLE: "Obsidian (epost-import)"
+      # Basic auth för webb-UI:t (används bara vid engångskonfig).
+      CUSTOM_USER: ${OBSIDIAN_WEB_USER:-admin}
+      PASSWORD: ${OBSIDIAN_WEB_PASSWORD:?ange OBSIDIAN_WEB_PASSWORD i .env}
+      # Läses av init-skriptet (obsidian/custom-cont-init.d/...).
+      OBSIDIAN_VAULT_NAME: ${OBSIDIAN_VAULT_NAME:-Daniel}
+      LOCAL_REST_API_VERSION: ${LOCAL_REST_API_VERSION:-5.1.0}
+    volumes:
+      # NAMED VOLUME med flit — INTE bind mount mot en värd-mapp.
+      # Named volumes beter sig identiskt på Windows/Docker Desktop
+      # (WSL2) och på TOS/Linux-NAS:en. Allt Obsidian-tillstånd
+      # (valv, .obsidian-config, plugins, LiveSync-inställningar,
+      # Local REST API-nyckeln) ligger under /config.
+      - epost-import-obsidian-config:/config
+    networks:
+      - epost-import-net
+
+    # --------------------------------------------------------
+    #  WEBB-UI — ENDAST FÖR ENGÅNGSKONFIGURATION
+    # --------------------------------------------------------
+    #  Avkommentera raden nedan, kör `docker compose up -d obsidian`,
+    #  öppna https://127.0.0.1:3001 (självsignerat cert), konfigurera
+    #  LiveSync + hämta Local REST API-nyckeln (se README.md),
+    #  KOMMENTERA sedan raden igen och kör `docker compose up -d`.
+    #  Bindningen till 127.0.0.1 gör att porten aldrig når nätet
+    #  utanför NAS:en.
+    # ports:
+    #   - "127.0.0.1:3001:3001"
+    # --------------------------------------------------------
+
+    # Local REST API (27124/https, självsignerat) exponeras MEDVETET
+    # inte mot host-nätverket — bara mail-importer når den internt
+    # på https://obsidian:27124.
+    expose:
+      - "27124"
+
+    # Krävs av Electron/Chromium i Selkies-imagen.
+    shm_size: "1gb"
+
+    # Resursgränser så en bugg aldrig kan svälta NAS:en.
+    mem_limit: ${OBSIDIAN_MEM_LIMIT:-1g}
+    cpus: ${OBSIDIAN_CPUS:-1.0}
+
+    # Local REST API svarar på 27124 så snart valvet är öppet.
+    # Vid ALLRA första starten blir den "unhealthy" tills du gjort
+    # engångskonfigen i webb-UI:t — det är meningen (mail-importer
+    # ska inte börja förrän LiveSync + nyckel finns). mail-importer
+    # väntar dessutom själv in API:t med retry/backoff.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -ksf https://localhost:27124/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ----------------------------------------------------------
+  #  Mail-importer — IMAP (Proton Bridge) -> Local REST API
+  # ----------------------------------------------------------
+  mail-importer:
+    build:
+      context: ./mail-importer
+      dockerfile: Dockerfile
+    image: obsidian-epost-import/mail-importer:latest
+    container_name: epost-import-importer
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Fast internt — pratar ALDRIG med Obsidian via extern IP.
+      # 27124 är Local REST API-pluginets HTTPS-port (självsignerat
+      # cert). Vill du hellre köra oskyddad HTTP: aktivera pluginets
+      # HTTP-server och sätt http://obsidian:27123 här.
+      OBSIDIAN_API_URL: ${OBSIDIAN_API_URL:-https://obsidian:27124}
+      OBSIDIAN_API_VERIFY_TLS: ${OBSIDIAN_API_VERIFY_TLS:-false}
+      STATE_DB_PATH: /data/state.sqlite3
+      HEARTBEAT_PATH: /data/heartbeat
+      TZ: ${TZ:-Europe/Stockholm}
+    volumes:
+      # NAMED VOLUME med flit — INTE bind mount. SQLite gör frekventa
+      # små writes/locks och beter sig illa på en Windows-bind-mount
+      # via WSL2. Named volume = samma beteende på Windows nu och på
+      # NAS:en sen. Ligger INTE i Obsidian-valvet.
+      - epost-import-importer-state:/data
+    networks:
+      - epost-import-net
+    depends_on:
+      obsidian:
+        # Skulle healthchecken strula på första setupen: byt till
+        # `service_started` (importern väntar ändå in API:t själv).
+        condition: service_healthy
+    # Låt en påbörjad import bli klar vid `docker compose stop`.
+    stop_grace_period: 90s
+    # För värdar där Proton Bridge kör på Docker-hosten (Linux/NAS).
+    # Ofarligt på Docker Desktop.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mem_limit: ${IMPORTER_MEM_LIMIT:-512m}
+    cpus: ${IMPORTER_CPUS:-0.75}
+
+networks:
+  epost-import-net:
+    name: epost-import-net
+    driver: bridge
+
+# Docker-hanterade named volumes. Faktiska namn blir prefixade med
+# projektnamnet: obsidian-epost-import_epost-import-obsidian-config
+# och obsidian-epost-import_epost-import-importer-state.
+# Se README ("Portabilitet") för hur man flyttar dem mellan maskiner.
+volumes:
+  epost-import-obsidian-config:
+  epost-import-importer-state:

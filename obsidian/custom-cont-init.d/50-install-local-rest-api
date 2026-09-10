@@ -1,0 +1,77 @@
+#!/usr/bin/with-contenv bash
+# ------------------------------------------------------------------
+#  Förinstallerar / uppdaterar obsidian-local-rest-api-pluginet i
+#  valvet så att mail-importer kan nå Local REST API på 27124.
+#
+#  - Idempotent: körs vid varje containerstart, gör inget om rätt
+#    version redan ligger på plats.
+#  - Fäller ALDRIG containern: kan pluginet inte hämtas (t.ex. ingen
+#    internet vid start) loggas en varning och du får installera det
+#    manuellt via webb-UI:t i stället.
+#  - Restricted mode / "Community plugins: On" måste du bekräfta EN
+#    gång i GUI:t (görs ändå i samma veva som LiveSync-inloggningen).
+# ------------------------------------------------------------------
+
+PLUGIN_ID="obsidian-local-rest-api"
+PLUGIN_VERSION="${LOCAL_REST_API_VERSION:-5.1.0}"
+VAULT_NAME="${OBSIDIAN_VAULT_NAME:-Daniel}"
+
+VAULT_DIR="/config/${VAULT_NAME}"
+OBS_DIR="${VAULT_DIR}/.obsidian"
+PLUGIN_DIR="${OBS_DIR}/plugins/${PLUGIN_ID}"
+BASE_URL="https://github.com/coddingtonbear/${PLUGIN_ID}/releases/download/${PLUGIN_VERSION}"
+
+log() { echo "[custom-init] local-rest-api: $*"; }
+
+# --- Redan rätt version? -----------------------------------------
+if [ -f "${PLUGIN_DIR}/manifest.json" ] && \
+   grep -q "\"version\"[[:space:]]*:[[:space:]]*\"${PLUGIN_VERSION}\"" "${PLUGIN_DIR}/manifest.json"; then
+    log "v${PLUGIN_VERSION} finns redan i valvet '${VAULT_NAME}' — hoppar över"
+    exit 0
+fi
+
+log "installerar v${PLUGIN_VERSION} i valvet '${VAULT_NAME}'"
+mkdir -p "${PLUGIN_DIR}"
+
+# --- Hämta plugin-filerna --------------------------------------
+required_ok=1
+for f in manifest.json main.js styles.css; do
+    if curl -fsSL --retry 3 --connect-timeout 10 -o "${PLUGIN_DIR}/${f}.tmp" "${BASE_URL}/${f}"; then
+        mv "${PLUGIN_DIR}/${f}.tmp" "${PLUGIN_DIR}/${f}"
+        log "hämtade ${f}"
+    else
+        rm -f "${PLUGIN_DIR}/${f}.tmp"
+        if [ "${f}" = "styles.css" ]; then
+            log "ingen styles.css i releasen (ok)"
+        else
+            log "VARNING: kunde inte hämta ${f} — installera pluginet manuellt via GUI"
+            required_ok=0
+        fi
+    fi
+done
+
+if [ "${required_ok}" != "1" ]; then
+    exit 0
+fi
+
+# --- Aktivera pluginet -----------------------------------------
+CP_FILE="${OBS_DIR}/community-plugins.json"
+if [ ! -f "${CP_FILE}" ]; then
+    printf '["%s"]\n' "${PLUGIN_ID}" > "${CP_FILE}"
+    log "skapade community-plugins.json"
+elif ! grep -q "\"${PLUGIN_ID}\"" "${CP_FILE}"; then
+    # Lägg id:t först i JSON-arrayen och städa ev. "[ ,\n" / ", ]".
+    sed -i "s/^\[[[:space:]]*/[\"${PLUGIN_ID}\", /" "${CP_FILE}"
+    sed -i "s/,[[:space:]]*\]/]/" "${CP_FILE}"
+    log "lade till ${PLUGIN_ID} i community-plugins.json"
+fi
+
+# --- Rätt ägare så Obsidian (kör som 'abc') kan läsa ----------
+if command -v lsiown >/dev/null 2>&1; then
+    lsiown -R abc:abc "${OBS_DIR}"
+else
+    chown -R "${PUID:-1000}:${PGID:-1000}" "${OBS_DIR}" 2>/dev/null || true
+fi
+
+log "klart — bekräfta 'Community plugins: On' i GUI:t vid engångskonfigen"
+exit 0
