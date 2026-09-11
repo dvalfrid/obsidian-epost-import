@@ -64,7 +64,7 @@ VNC- eller sandbox-logik underhålls i det här repot.
 
 ```
 obsidian-epost-import/
-├── docker-compose.yml        # obsidian + mail-importer, eget nät/volymer/resursgränser
+├── docker-compose.yml        # obsidian + mail-importer + autoheal, eget nät/volymer/resursgränser
 ├── .env.example              # alla miljövariabler
 ├── README.md
 ├── CLAUDE.md                 # kontext för AI-assistenten
@@ -337,6 +337,7 @@ Se **`.env.example`** för fullständig lista med kommentarer. De viktigaste:
 docker compose ps                       # status + health
 docker compose logs -f mail-importer    # importloggen
 docker compose logs -f obsidian         # Obsidian / LiveSync / init-skriptet
+docker compose logs -f autoheal         # ser du en omstart den gjort åt dig
 docker compose run --rm mail-importer list-folders   # lista IMAP-mappar
 docker compose restart mail-importer
 docker compose stop                     # graceful (SIGTERM)
@@ -369,9 +370,84 @@ Satta direkt i `docker-compose.yml`:
 |---|---|---|---|
 | `obsidian` | `1g` | `1.0` | `shm_size: 1gb` (krävs av Electron) |
 | `mail-importer` | `512m` | `0.75` | `stop_grace_period: 90s` |
+| `autoheal` | `64m` | `0.1` | se "Robusthet & självläkning" nedan |
 
-Båda tjänsterna kör med `restart: unless-stopped`. En eventuell bugg kan alltså
-aldrig svälta CouchDB, Cloudflared eller annat på NAS:en.
+Alla tre tjänster kör med `restart: unless-stopped`. En eventuell bugg kan
+alltså aldrig svälta CouchDB, Cloudflared eller annat på NAS:en.
+
+---
+
+## Robusthet & självläkning vid NAS-omstart/strömavbrott
+
+Målet: efter ett strömavbrott eller en omstart av NAS:en ska hela stacken komma
+igång av sig själv, precis som `obsidian-nas-sync`. Så här hänger det ihop:
+
+### Vad som redan är robust by design
+
+- **`restart: unless-stopped`** på alla tre tjänster → när dockerd kommer upp
+  igen efter ett strömavbrott startar Docker om dem automatiskt, oavsett hur
+  länge NAS:en var nere. (Enda undantaget: om du körde `docker compose stop`
+  manuellt innan avbrottet — då låter Docker dem vara stoppade, som förväntat.)
+- **Startordning spelar ingen roll.** `depends_on: condition: service_healthy`
+  styr bara `docker compose up`-kommandot — dockerds egen omstart-vid-boot
+  respekterar den INTE. Det är okej: `mail-importer` har egen
+  `_wait_for_obsidian()`-retry (backoff upp till 60 s) och kopplar upp sig så
+  fort Local REST API svarar, oavsett i vilken ordning containrarna kom igång.
+- **IMAP/nätverksfel:** automatisk återanslutning med backoff upp till
+  `RECONNECT_BACKOFF_MAX_SECONDS` (default 300 s) — täcker både att Proton
+  Bridge inte hunnit starta än och tillfälliga nätverksglapp.
+- **Krascha-säker SQLite:** WAL-läge + `synchronous=FULL` + att
+  "klart"-markeringen (`mark_imported`) är den sista, atomiska operationen i
+  varje import. Ett strömavbrott mitt i en import ger i värsta fall att samma
+  UID importeras en gång till nästa körning — aldrig en dubblett eller en
+  trasig databas (filer skrivs bara om de saknas).
+- **LiveSync** i obsidian-containern beter sig som på vilken annan enhet som
+  helst: passphrase och anslutning ligger kvar i den persisterade
+  `/config`-volymen, den återupptar synken automatiskt när den kommer upp
+  — ingen ny inloggning krävs efter första engångskonfigen.
+
+### Det redan lösta gapet: hängda (inte kraschade) containrar
+
+`restart: unless-stopped` triggar bara om **processen faktiskt avslutas**. Om
+Obsidian/Electron fryser utan att kraschen syns som en exit (det vanligaste
+sättet en headless GUI-container "dör" på) förblir containern uppe men
+obrukbar — Docker rapporterar `unhealthy` men startar inget om av sig själv.
+
+Det täcks av **`autoheal`**-tjänsten: den lyssnar på Dockers hälsostatus för
+alla containrar märkta `autoheal=true` (`obsidian` och `mail-importer`) och
+kör `docker restart` på dem om de är `unhealthy` en stund.
+
+> **Avvägning:** `autoheal` kräver att `/var/run/docker.sock` monteras in,
+> vilket i praktiken motsvarar root-åtkomst till hela Docker-hosten. Det är en
+> medveten kompromiss för full självläkning. Vill du hellre slippa den
+> exponeringen: ta bort `autoheal`-tjänsten och `labels: [autoheal=true]` på
+> de två andra tjänsterna i `docker-compose.yml` — du behåller då fortfarande
+> omstart vid faktiska krascher, men måste själv då och då köra
+> `docker compose ps` och leta efter `unhealthy` om något hänger sig.
+
+### Enda manuella förutsättningen — Docker startar vid boot
+
+Det här styrs av NAS:en, inte av det här repot: se till att **Container
+Manager/Docker är satt att starta automatiskt vid boot** i TOS (annars kommer
+inget av ovanstående igång alls efter ett strömavbrott). Kontrollera i TOS:
+**Container Manager → Settings → "Enable at startup"** (namn kan variera mellan
+TOS-versioner). Detta är samma förutsättning som `obsidian-nas-sync` redan
+förlitar sig på.
+
+### Testa själv
+
+```bash
+# Simulera att en container hänger sig / kraschar:
+docker kill -s SIGSTOP epost-import-obsidian   # frys (unhealthy, inte exit)
+docker compose ps                              # se "unhealthy" dyka upp
+#   ... vänta in AUTOHEAL_START_PERIOD + några healthcheck-intervall ...
+docker compose logs -f autoheal                 # se den starta om containern
+
+# Simulera ett strömavbrott:
+docker compose kill                             # hårt, utan graceful shutdown
+docker compose ps                               # containrarna kommer tillbaka
+                                                 # av sig själva (unless-stopped)
+```
 
 ---
 

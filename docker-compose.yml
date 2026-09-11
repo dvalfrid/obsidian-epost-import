@@ -9,6 +9,18 @@
 #  den publika URL:en https://obsidian.valfridsson.se (Cloudflare
 #  Tunnel) precis som vilken vanlig klientenhet som helst —
 #  konfigureras EN gång via webb-UI, se README.md.
+#
+#  ROBUSTHET VID NAS-OMSTART/STRÖMAVBROTT — se README
+#  ("Robusthet & självläkning"):
+#    - restart: unless-stopped på alla tjänster => Docker startar om
+#      dem automatiskt när dockerd kommer upp igen efter ett strömavbrott.
+#    - depends_on/condition styr bara ordningen vid `docker compose up`,
+#      INTE dockerds egen omstart-vid-boot — det spelar ingen roll här
+#      eftersom mail-importer redan väntar in Obsidian med egen
+#      retry/backoff oavsett startordning.
+#    - autoheal (sist i filen) startar om en container som Docker
+#      rapporterar "unhealthy" — täcker fallet att en container hänger
+#      utan att processen kraschar (vanligast för Electron/Obsidian).
 # ============================================================
 
 name: obsidian-epost-import
@@ -29,6 +41,10 @@ services:
     image: obsidian-epost-import/obsidian:latest
     container_name: epost-import-obsidian
     restart: unless-stopped
+    labels:
+      # Låter autoheal-tjänsten längre ned starta om den här
+      # containern om Docker rapporterar den som "unhealthy".
+      - "autoheal=true"
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -81,12 +97,14 @@ services:
     # engångskonfigen i webb-UI:t — det är meningen (mail-importer
     # ska inte börja förrän LiveSync + nyckel finns). mail-importer
     # väntar dessutom själv in API:t med retry/backoff.
+    # start_period är satt generöst (NAS-reboot => många containrar
+    # drar disk-I/O samtidigt => Electron kan ta sin tid att boota).
     healthcheck:
       test: ["CMD-SHELL", "curl -ksf https://localhost:27124/ >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      start_period: 180s
 
   # ----------------------------------------------------------
   #  Mail-importer — IMAP (Proton Bridge) -> Local REST API
@@ -98,6 +116,10 @@ services:
     image: obsidian-epost-import/mail-importer:latest
     container_name: epost-import-importer
     restart: unless-stopped
+    labels:
+      # Låter autoheal-tjänsten starta om containern om huvudloopen
+      # skulle hänga sig (heartbeat-filen slutar uppdateras).
+      - "autoheal=true"
     env_file:
       - .env
     environment:
@@ -109,6 +131,9 @@ services:
       OBSIDIAN_API_VERIFY_TLS: ${OBSIDIAN_API_VERIFY_TLS:-false}
       STATE_DB_PATH: /data/state.sqlite3
       HEARTBEAT_PATH: /data/heartbeat
+      # Docker HEALTHCHECK (i mail-importer/Dockerfile) rapporterar
+      # "unhealthy" om heartbeaten är äldre än detta.
+      HEARTBEAT_MAX_AGE_SECONDS: ${HEARTBEAT_MAX_AGE_SECONDS:-900}
       TZ: ${TZ:-Europe/Stockholm}
     volumes:
       # NAMED VOLUME med flit — INTE bind mount. SQLite gör frekventa
@@ -131,6 +156,48 @@ services:
       - "host.docker.internal:host-gateway"
     mem_limit: ${IMPORTER_MEM_LIMIT:-512m}
     cpus: ${IMPORTER_CPUS:-0.75}
+
+  # ----------------------------------------------------------
+  #  Autoheal — startar om "autoheal=true"-märkta containrar som
+  #  Docker rapporterar unhealthy, dvs. hängda men inte kraschade.
+  #  restart: unless-stopped täcker bara faktiska process-exits;
+  #  det här täcker resten.
+  #
+  #  OBS — SÄKERHETSAVVÄGNING: kräver att /var/run/docker.sock
+  #  monteras in. Den socketen är i praktiken likvärdig med
+  #  root-åtkomst till HELA Docker-hosten (kan starta/stoppa/skapa
+  #  vilken container som helst, inte bara de två i det här
+  #  projektet). Vägs medvetet mot självläkningen. Vill du hellre
+  #  slippa den exponeringen: ta bort den här tjänsten + `labels:`-
+  #  raderna ovan och lita på restart:unless-stopped + att du själv
+  #  då och då kollar `docker compose ps` (visar "unhealthy").
+  #
+  #  Samma /var/run/docker.sock-sökväg fungerar oförändrat på både
+  #  Docker Desktop (Windows/Mac) och Linux/TOS — det är alltså
+  #  INTE ett brott mot portabilitetsprincipen (ingen NAS- eller
+  #  Windows-specifik sökväg), bara en medveten privilegie-avvägning.
+  # ----------------------------------------------------------
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: epost-import-autoheal
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 30
+      # Extra marginal utöver containrarnas egna healthcheck-
+      # start_period, för att undvika omstarts-loopar på en
+      # nyss omstartad, hårt belastad NAS.
+      AUTOHEAL_START_PERIOD: 120
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
+      TZ: ${TZ:-Europe/Stockholm}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Behöver inget eget nätverk (pratar bara med docker.sock) — satt
+    # ändå så vi slipper att Compose skapar ett extra "default"-nät.
+    networks:
+      - epost-import-net
+    mem_limit: 64m
+    cpus: 0.1
 
 networks:
   epost-import-net:

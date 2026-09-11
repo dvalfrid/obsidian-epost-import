@@ -44,8 +44,15 @@ Två tjänster i `docker-compose.yml`:
    `depends_on: obsidian (service_healthy)`; healthchecken curl:ar 27124. Vid
    allra första setupen är obsidian "unhealthy" tills GUI-stegen är gjorda —
    det är meningen. Importern har dessutom egen `_wait_for_obsidian()`-retry.
+3. `autoheal` (`willfarrell/autoheal`) — startar om `obsidian`/`mail-importer`
+   om Docker rapporterar dem `unhealthy` (hängd men inte kraschad process;
+   `restart: unless-stopped` reagerar bara på faktisk exit). Kräver
+   `/var/run/docker.sock` inmonterad — medveten säkerhetsavvägning, se
+   kommentaren i `docker-compose.yml` och README "Robusthet & självläkning".
+   Filtrerar på `labels: [autoheal=true]` på de två andra tjänsterna.
 
-Resursgränser via `mem_limit`/`cpus` (obsidian 1g/1.0, importer 512m/0.75).
+Resursgränser via `mem_limit`/`cpus` (obsidian 1g/1.0, importer 512m/0.75,
+autoheal 64m/0.1).
 
 ## Engångskonfiguration (kan inte automatiseras bort)
 
@@ -90,6 +97,14 @@ Måste göras i webb-UI:t en gång (se README steg 1):
   **Bara named volumes, aldrig bind mounts** (WSL2-bind-mounts är långsamma och
   trasslar med SQLite-locks; named volumes beter sig lika på Windows och NAS).
   Se README "Portabilitet" för volym-flytt mellan maskiner.
+  (`/var/run/docker.sock` i `autoheal` är undantaget — den sökvägen är
+  identisk på Docker Desktop och Linux, så den bryter inte principen.)
+- **Robusthet:** `restart: unless-stopped` + `autoheal` + interna retry-loopar
+  ska tillsammans göra att hela stacken kommer igång själv efter ett
+  NAS-strömavbrott, utan manuella steg — samma standard som `obsidian-nas-sync`.
+  `depends_on`/healthcheck-villkor styr bara `docker compose up`, inte dockerds
+  egen omstart-vid-boot; lita aldrig på startordning där, lita på att varje
+  tjänst själv väntar in sina beroenden (redan implementerat).
 
 ## Referensvärden (från obsidian-nas-sync, får läsas men inte ändras där)
 
