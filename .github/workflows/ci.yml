@@ -34,10 +34,14 @@ jobs:
         run: bash -n obsidian/custom-cont-init.d/50-install-local-rest-api
 
       - name: Validate docker-compose.yml
-        run: docker compose config --quiet
+        run: |
+          # mail-importer har env_file: .env — compose kräver att filen
+          # finns även bara för att parsa/validera configen. .env checkas
+          # aldrig in; den här är bara en tom platshållare för CI.
+          touch .env
+          docker compose config --quiet
         env:
-          # Bara för att tillfredsställa OBSIDIAN_WEB_PASSWORD:?-kravet —
-          # .env checkas aldrig in, används aldrig till att köra något.
+          # Bara för att tillfredsställa OBSIDIAN_WEB_PASSWORD:?-kravet.
           OBSIDIAN_WEB_PASSWORD: ci-placeholder
 
   # Bygger de tre images (obsidian, bridge, mail-importer) på varje körning
