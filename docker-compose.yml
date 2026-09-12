@@ -21,6 +21,12 @@
 #    - autoheal (sist i filen) startar om en container som Docker
 #      rapporterar "unhealthy" — täcker fallet att en container hänger
 #      utan att processen kraschar (vanligast för Electron/Obsidian).
+#
+#  PUBLICERADE IMAGES — se README "Kör utan utvecklingsmiljö":
+#    Varje tjänst har både `image:` (publicerad av CI till GHCR,
+#    `docker compose pull` hämtar den) och `build:` (bygg själv från
+#    källkod, `docker compose up -d --build`). `docker compose pull`
+#    kräver inte att du har repots källkod/Dockerfiler lokalt.
 # ============================================================
 
 name: obsidian-epost-import
@@ -32,13 +38,16 @@ services:
   #  init-skript som förinstallerar Local REST API-pluginet.
   # ----------------------------------------------------------
   obsidian:
+    # Prebuilt image publicerad av CI. `docker compose pull` hämtar/
+    # uppdaterar den. Pinna en version: byt "latest" mot t.ex. "0.1.0".
+    image: ghcr.io/dvalfrid/obsidian-epost-import/obsidian:latest
+    # …eller bygg från källkod i stället: `docker compose build obsidian`.
     build:
       context: ./obsidian
       args:
         # Pinnad LSIO-tagg. Nyare finns på:
         # https://github.com/linuxserver/docker-obsidian/releases
         OBSIDIAN_BASE_TAG: ${OBSIDIAN_BASE_TAG:-v1.13.7-ls144}
-    image: obsidian-epost-import/obsidian:latest
     container_name: epost-import-obsidian
     restart: unless-stopped
     labels:
@@ -129,13 +138,17 @@ services:
   #  omstart — ingen ny inloggning behövs efter det.
   # ----------------------------------------------------------
   bridge:
+    # Prebuilt image publicerad av CI (GPLv3 — Proton Bridges källkod:
+    # https://github.com/ProtonMail/proton-bridge). `docker compose pull`
+    # hämtar/uppdaterar den. Pinna en version: byt "latest" mot t.ex. "0.1.0".
+    image: ghcr.io/dvalfrid/obsidian-epost-import/bridge:latest
+    # …eller bygg från källkod i stället: `docker compose build bridge`.
     build:
       context: ./bridge
       args:
         # Pinnad version. Nyare finns på:
         # https://github.com/ProtonMail/proton-bridge/releases
         BRIDGE_VERSION: ${BRIDGE_VERSION:-3.26.0-1}
-    image: obsidian-epost-import/bridge:latest
     container_name: epost-import-bridge
     restart: unless-stopped
     labels:
@@ -163,10 +176,13 @@ services:
   #  Mail-importer — IMAP (Proton Bridge) -> Local REST API
   # ----------------------------------------------------------
   mail-importer:
+    # Prebuilt image publicerad av CI. `docker compose pull` hämtar/
+    # uppdaterar den. Pinna en version: byt "latest" mot t.ex. "0.1.0".
+    image: ghcr.io/dvalfrid/obsidian-epost-import/mail-importer:latest
+    # …eller bygg från källkod i stället: `docker compose build mail-importer`.
     build:
       context: ./mail-importer
       dockerfile: Dockerfile
-    image: obsidian-epost-import/mail-importer:latest
     container_name: epost-import-importer
     restart: unless-stopped
     labels:

@@ -126,10 +126,44 @@ obsidian-epost-import/
 
 ---
 
-## Snabbstart
+## Kör utan utvecklingsmiljö (rekommenderat)
+
+Du behöver **inte** klona repot, ha Python eller Dockerfiler lokalt — CI
+publicerar färdigbyggda images till GHCR för alla tre tjänster. Du behöver
+bara `docker-compose.yml` + en `.env`.
+
+| Tagg | Byggs | Använd för |
+|---|---|---|
+| `:latest` | vid varje release (`vX.Y.Z`) | **normal drift** — följer senaste release |
+| `:X.Y.Z` / `:X.Y` / `:X` | vid varje release | pinna en exakt version |
+| `:main` / `:sha-<kort>` | vid varje push till `main` | testa senaste (kan vara ostabilt) |
 
 ```bash
-git clone <detta-repo> obsidian-epost-import
+mkdir obsidian-epost-import && cd obsidian-epost-import
+curl -fsSLO https://raw.githubusercontent.com/dvalfrid/obsidian-epost-import/main/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/dvalfrid/obsidian-epost-import/main/.env.example
+cp .env.example .env
+# Redigera .env — minst IMAP_USER, OBSIDIAN_WEB_PASSWORD
+
+docker compose pull
+```
+
+Fortsätt sedan med **Steg 1–3** nedan (samma oavsett om du körde `pull` eller
+byggde från källkod) — de går inte att automatisera bort: Obsidian-GUI:t och
+Proton-inloggningen kräver dig, en riktig människa, vid tangentbordet.
+
+Uppdatera senare: `docker compose pull && docker compose up -d`.
+`docker-compose.yml` använder `:latest` för alla tre images — pinna genom att
+byta t.ex. `image: ghcr.io/dvalfrid/obsidian-epost-import/bridge:0.1.0`.
+
+---
+
+## Snabbstart — från källkod
+
+Vill du hellre bygga själv (utveckling, eller granska koden innan du kör den):
+
+```bash
+git clone https://github.com/dvalfrid/obsidian-epost-import
 cd obsidian-epost-import
 cp .env.example .env
 # Redigera .env — minst IMAP_USER, OBSIDIAN_WEB_PASSWORD
@@ -150,7 +184,7 @@ docker compose run --rm -it bridge init
 #   -> exit
 
 # 5. Hitta exakt label-namn och starta allt:
-docker compose up -d bridge
+docker compose up -d --build bridge
 docker compose run --rm mail-importer list-folders   # leta upp t.ex. "Labels/Obsidian"
 #   sätt MAILBOX i .env till det du hittade
 docker compose up -d --build
@@ -175,10 +209,10 @@ I `docker-compose.yml`, under tjänsten `obsidian`, **avkommentera**:
 ```
 
 Bindningen till `127.0.0.1` gör att porten bara går att nå från själva NAS:en.
-Bygg och starta:
+Starta (bygger automatiskt om du kör från källkod och inte redan `pull`:at):
 
 ```bash
-docker compose up -d --build obsidian
+docker compose up -d obsidian
 ```
 
 ### 1b. Öppna webb-UI:t
@@ -288,12 +322,13 @@ Proton Bridge måste loggas in **en gång**, interaktivt. Det här kan **inte**
 automatiseras (kräver ditt lösenord + ev. 2FA-kod live) — måste köras av dig
 i en riktig terminal, inte något jag/en AI-assistent kan göra åt dig.
 
-### 3a. Bygg och logga in
+### 3a. Logga in
 
 ```bash
-docker compose build bridge
 docker compose run --rm -it bridge init
 ```
+
+(Bygger automatiskt först om du kör från källkod och inte redan `pull`:at.)
 
 Vänta tills `Welcome to Proton Mail Bridge interactive shell` visas (den
 genererar en GPG-nyckel + initierar sitt lösenordslager första gången — några
@@ -606,7 +641,8 @@ TerraMaster TOS/Linux senare:
 | `*_MEM_LIMIT` / `*_CPUS` | Om NAS:en har annan resursbudget |
 
 Allt annat är oförändrat (inklusive `IMAP_HOST=bridge` — Bridge körs i Docker
-på båda maskinerna). Bygg om på NAS:en med `docker compose up -d --build`.
+på båda maskinerna). På NAS:en: `docker compose pull && docker compose up -d`
+(eller `docker compose up -d --build` om du kör från källkod).
 
 ### Named volumes — namn och innehåll
 
@@ -668,11 +704,19 @@ docker compose up -d
 
 ### Ren start på NAS:en (utan att flytta något)
 
+Med prebuilt images (se "Kör utan utvecklingsmiljö"):
+
 ```bash
-git clone <repo> && cd obsidian-epost-import
+mkdir obsidian-epost-import && cd obsidian-epost-import
+curl -fsSLO https://raw.githubusercontent.com/dvalfrid/obsidian-epost-import/main/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/dvalfrid/obsidian-epost-import/main/.env.example
 cp .env.example .env   # fyll i, justera PUID/PGID
-docker compose up -d --build obsidian   # gör om steg 1 (engångskonfig)
+docker compose pull
+docker compose up -d obsidian   # gör om steg 1 (engångskonfig)
 # lägg OBSIDIAN_API_KEY i .env, stäng webb-UI-porten (steg 2)
 docker compose run --rm -it bridge init   # gör om steg 3a (engångsinloggning)
-docker compose up -d --build
+docker compose up -d
 ```
+
+...eller från källkod: `git clone` i stället för de två `curl`-raderna, och
+`docker compose up -d --build` sist.

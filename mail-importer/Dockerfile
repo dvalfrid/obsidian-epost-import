@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+LABEL org.opencontainers.image.source="https://github.com/dvalfrid/obsidian-epost-import" \
+      org.opencontainers.image.description="IMAP (Proton Bridge) -> Obsidian Local REST API-importer för obsidian-epost-import."
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1

@@ -11,6 +11,9 @@
 ARG OBSIDIAN_BASE_TAG=v1.13.7-ls144
 FROM lscr.io/linuxserver/obsidian:${OBSIDIAN_BASE_TAG}
 
+LABEL org.opencontainers.image.source="https://github.com/dvalfrid/obsidian-epost-import" \
+      org.opencontainers.image.description="Headless Obsidian (LinuxServer.io-bas) + förinstallerat Local REST API-plugin, för obsidian-epost-import."
+
 # LSIO kör bara skript i /custom-cont-init.d om katalogen ägs av root
 # (säkerhetsspärr). Därför bakas skriptet in här i stället för att
 # bind-monteras — då blir ägarskapet garanterat rätt.

@@ -192,6 +192,38 @@ Proton-konto, inte genom kodgranskning. Nämns här så de inte återupptäcks:
    nästlad tabell → ogiltig HTML, tolkades om oförutsägbart av markdownify)
    → till sist: `<div>` alltid som ytterwrapper, `<p>` bara när cellen INTE
    redan har block-innehåll.
+9. **`docker compose restart <tjänst>` efter `docker compose build <tjänst>`
+   fortsätter köra den GAMLA containerns redan-existerande image** — `restart`
+   startar bara om samma container, den plockar ALDRIG upp en nybyggd image.
+   Det gav en falsk trygghetskänsla: testbyggen (`docker run` mot `:latest`)
+   var korrekta, men den riktiga tjänsten körde ändå gammal kod tills en
+   `docker compose up -d [--build]` (som genererar en "Recreate"-rad i
+   outputen) faktiskt bytte ut containern. **Använd alltid `up -d` (ev.
+   `--build`) för att verkligen deploya en kodändring, aldrig bara `restart`.**
+   Verifiera vid osäkerhet: `docker inspect <container> --format '{{.Image}}'`
+   mot `docker image inspect <tagg> --format '{{.Id}}'` — ska vara lika.
+
+## Release & CI (GHCR)
+
+- Tre publicerade images: `ghcr.io/dvalfrid/obsidian-epost-import/{obsidian,bridge,mail-importer}`.
+  `docker-compose.yml` har både `image:` (prebuilt, `docker compose pull`)
+  och `build:` (källkod, `docker compose build`) på alla tre — samma fil
+  funkar för båda användningssätten (se README "Kör utan utvecklingsmiljö").
+- `.github/workflows/ci.yml`: `verify` (syntax/config-koll) → `images`
+  (matrisbygge av alla tre, pushar till GHCR efter `verify`). Taggning:
+  `:main`/`:sha-<kort>` på push till main, `:X.Y.Z`/`:X.Y`/`:X`/`:latest`
+  på `vX.Y.Z`-taggar, inget pushas på PR:ar. Bygger bara `linux/amd64`.
+- `.github/workflows/release-please.yml` + `release-please-config.json`
+  (`release-type: "simple"`, ett gemensamt versionsnummer för alla tre
+  images) sköter versionsbump + `CHANGELOG.md` från Conventional Commits
+  (`feat:`/`fix:`/`perf:` syns i changelogen). Committa därför med
+  Conventional Commits-prefix framöver för att detta ska fungera.
+- Proton Bridge är GPLv3 — redistribution av byggda binärer/images är
+  uttryckligen tillåtet (källkod redan publik hos Proton). OCI-labels
+  (`org.opencontainers.image.source`/`.licenses`) satta i `bridge/Dockerfile`
+  för spårbarhet. Se README/chatthistorik för research bakom detta.
+- Repo + GHCR-paket är **publika** (medvetet val, `gh repo edit --visibility
+  public` kört efter att git-historiken skannats igenom för läckta secrets).
 
 ## Referensvärden (från obsidian-nas-sync, får läsas men inte ändras där)
 

@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install mail-importer dependencies
+        run: pip install -r mail-importer/requirements.txt
+
+      - name: Python syntax check
+        run: python -m py_compile mail-importer/mailimporter/*.py
+
+      - name: Shell syntax check (bridge entrypoint)
+        run: sh -n bridge/entrypoint.sh
+
+      - name: Shell syntax check (obsidian init script)
+        run: bash -n obsidian/custom-cont-init.d/50-install-local-rest-api
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
+        env:
+          # Bara för att tillfredsställa OBSIDIAN_WEB_PASSWORD:?-kravet —
+          # .env checkas aldrig in, används aldrig till att köra något.
+          OBSIDIAN_WEB_PASSWORD: ci-placeholder
+
+  # Bygger de tre images (obsidian, bridge, mail-importer) på varje körning
+  # så en trasig Dockerfile fäller en PR. Pushar till GHCR bara efter att
+  # `verify` klarat sig:
+  #   - push till main  -> :main  och  :sha-<kort>   (bleeding edge, för test)
+  #   - tag vX.Y.Z       -> :X.Y.Z  :X.Y  :X  :latest  (en riktig release)
+  #   - pull request      -> bygger bara, pushar inget
+  images:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: obsidian
+            context: ./obsidian
+          - name: bridge
+            context: ./bridge
+          - name: mail-importer
+            context: ./mail-importer
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
+          # `latest` sätts automatiskt bara på den senaste semver-taggen
+          # (metadata-actions default: latest=auto).
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=sha,enable={{is_default_branch}}
+            type=ref,event=pr
+
+      - name: Build and push (${{ matrix.name }})
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # Bygger bara linux/amd64 (de flesta NAS-Docker-värdar, inkl.
+          # TerraMaster F4-424 Pro). Lägg till platforms: linux/amd64,linux/arm64
+          # (kräver docker/setup-qemu-action) för att även serva ARM-NAS.

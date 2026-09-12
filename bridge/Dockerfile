@@ -19,6 +19,13 @@
 # ------------------------------------------------------------------
 FROM debian:bookworm-slim
 
+# Proton Mail Bridge är GPLv3 — redistribution av byggda binärer/images
+# är uttryckligen tillåtet under GPLv3 så länge källkoden görs
+# tillgänglig, vilket Proton redan gör publikt (se source-labeln nedan).
+LABEL org.opencontainers.image.source="https://github.com/dvalfrid/obsidian-epost-import" \
+      org.opencontainers.image.description="Proton Mail Bridge, headless, byggd från Protons officiella .deb + GPG-signaturverifiering. Bridge självt: https://github.com/ProtonMail/proton-bridge (GPLv3)." \
+      org.opencontainers.image.licenses="GPL-3.0-or-later"
+
 ARG BRIDGE_VERSION=3.26.0-1
 # Protons officiella signeringsnyckel ("Proton Technologies AG
 # (ProtonMail Bridge developers) <bridge@protonmail.ch>"), hämtad
