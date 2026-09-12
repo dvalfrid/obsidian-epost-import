@@ -1,20 +1,23 @@
 # obsidian-epost-import
 
-Hämtar epost från en **Proton Mail-label** via en lokal/nätverksåtkomlig
-**Proton Mail Bridge** och skapar **anteckningar + bilagor** i Obsidian-valvet
-**Daniel** — genom en **egen, headless Obsidian-instans i Docker**.
+Hämtar epost från en **Proton Mail-label** via en **egen, containeriserad
+Proton Mail Bridge** och skapar **anteckningar + bilagor** i Obsidian-valvet
+**Daniel** — genom en **egen, headless Obsidian-instans i Docker**. Hela
+kedjan (Bridge, Obsidian, importern) körs i det här repots egen
+docker-compose-stack, oberoende av någon alltid-påslagen dator.
 
 ```
-Proton Mail Bridge (IMAP)                Cloudflare Tunnel
-        │                                        │
-        ▼                                        ▼
-┌─────────────────┐    https://obsidian:27124    ┌──────────────────────────┐
-│  mail-importer  │ ───────────────────────────▶ │  obsidian (LSIO-image)   │
-│  (Python)       │      Local REST API          │  LiveSync ──▶ CouchDB     │
-└─────────────────┘                              └──────────────────────────┘
-        │                                        (obsidian.valfridsson.se /
-        ▼                                         vault-daniel)
-  /data/state.sqlite3   (egen volym, EJ i valvet)
+                                                              Cloudflare Tunnel
+                                                                      │
+                                                                      ▼
+┌───────────────┐  IMAP (143)  ┌─────────────────┐  https://obsidian:27124  ┌──────────────────────────┐
+│  bridge       │◀────────────│  mail-importer  │─────────────────────────▶│  obsidian (LSIO-image)   │
+│  (egen image) │              │  (Python)       │      Local REST API      │  LiveSync ──▶ CouchDB     │
+└───────────────┘              └─────────────────┘                          └──────────────────────────┘
+        │                              │                                   (obsidian.valfridsson.se /
+        ▼                              ▼                                    vault-daniel)
+  Proton-konto (verkligt      /data/state.sqlite3
+  IMAP, riktig inloggning)    (egen volym, EJ i valvet)
 ```
 
 ---
@@ -28,7 +31,7 @@ Det här är ett **eget repo** och ett **eget docker-compose-projekt**
 |---|---|---|
 | Compose-projekt | eget | `obsidian-epost-import` |
 | Nätverk | `couchdb-internal` | `epost-import-net` |
-| Volymer | `couchdb-...` | `epost-import-obsidian-config`, `epost-import-importer-state` |
+| Volymer | `couchdb-...` | `epost-import-obsidian-config`, `epost-import-bridge-config`, `epost-import-importer-state` |
 | Åtkomst till CouchDB | via `cloudflared`-container internt | **som vilken klient som helst**, via `https://obsidian.valfridsson.se` |
 
 Obsidian-containern här ansluter till CouchDB **precis som en vanlig
@@ -60,11 +63,50 @@ VNC- eller sandbox-logik underhålls i det här repot.
 
 ---
 
+## Om bridge-containern
+
+**Egen image** (`./bridge/Dockerfile`), inte en färdig från Docker Hub. De
+undersökta community-imagerna (t.ex. `shenxn/protonmail-bridge`, 694★, 1M+
+pulls) visade sig ha slutat publiceras till Docker Hub ~17 månader innan
+detta skrevs, trots att källkoden fortsatte bumpa version — deras
+byggpipeline hade gått sönder tyst. Att pinna en sådan image hade betytt
+17 månader gamla säkerhetshål i något som dekrypterar hela brevlådan, och
+Proton stänger historiskt av inloggning för för gamla Bridge-versioner.
+
+Vår egen image:
+
+- Hämtar Protons **officiella** `.deb`-paket direkt från
+  `github.com/ProtonMail/proton-bridge/releases` (samma binär som en native
+  installation skulle använda).
+- **Verifierar OpenPGP-signaturen** mot Protons publicerade signeringsnyckel
+  (fingerprint pinnad i Dockerfilen) innan installation — bygget FALLERAR om
+  den inte stämmer. Det gör shenxn:s image inte alls.
+- `pass` (GNU) + en headless-genererad GPG-nyckel som lokalt lösenordslager,
+  eftersom Bridge på Linux kräver `secret-service` (dbus, kräver skrivbord —
+  finns inte här) eller `pass`.
+- `socat` proxar Bridges hårdkodade `127.0.0.1`-bara IMAP/SMTP-portar
+  (`1143`/`1025`, Bridges egna interna standardportar) ut till `143`/`25` på
+  containerns interface, så att `mail-importer` kan nå dem över
+  `epost-import-net`. **Portnumren MÅSTE skilja sig** — `socat`s
+  "alla interface"-bindning kolliderar annars med Bridges `127.0.0.1`-bindning
+  för samma portnummer.
+- Vägrar starta i daemon-läge (`docker compose up bridge`) om
+  engångsinloggningen (`init`) inte körts än — loggar ett tydligt fel i
+  stället för att som referensimagen tyst köra vidare med ett okrypterat
+  lösenordslager.
+
+Se `bridge/entrypoint.sh` för hela logiken. Uppgradera genom att sätta en
+nyare `BRIDGE_VERSION` i `.env` (se
+[Proton Bridge releases](https://github.com/ProtonMail/proton-bridge/releases))
+och `docker compose up -d --build bridge`.
+
+---
+
 ## Innehåll
 
 ```
 obsidian-epost-import/
-├── docker-compose.yml        # obsidian + mail-importer + autoheal, eget nät/volymer/resursgränser
+├── docker-compose.yml        # obsidian + bridge + mail-importer + autoheal, eget nät/volymer/resursgränser
 ├── .env.example              # alla miljövariabler
 ├── README.md
 ├── CLAUDE.md                 # kontext för AI-assistenten
@@ -72,6 +114,10 @@ obsidian-epost-import/
 │   ├── Dockerfile            # FROM lscr.io/linuxserver/obsidian:<pinnad> + init-skript
 │   └── custom-cont-init.d/
 │       └── 50-install-local-rest-api   # förinstallerar Local REST API-pluginet
+├── bridge/
+│   ├── Dockerfile            # FROM debian:bookworm-slim + officiell .deb + GPG-verifiering
+│   ├── entrypoint.sh         # init/daemon-lägen, pass/GPG-lösenordslager, socat-proxy
+│   └── gpg-batch-params      # headless GPG-nyckelgenerering åt pass
 └── mail-importer/
     ├── Dockerfile
     ├── requirements.txt
@@ -86,15 +132,27 @@ obsidian-epost-import/
 git clone <detta-repo> obsidian-epost-import
 cd obsidian-epost-import
 cp .env.example .env
-# Redigera .env — minst IMAP_USER, IMAP_PASS, IMAP_HOST, OBSIDIAN_WEB_PASSWORD
+# Redigera .env — minst IMAP_USER, OBSIDIAN_WEB_PASSWORD
 
 # 1. Öppna webb-UI-porten tillfälligt (steg 1a), starta bara obsidian:
-docker compose up -d obsidian
+docker compose up -d --build obsidian
 
 # 2. Konfigurera LiveSync + hämta Local REST API-nyckeln via webb-UI (steg 1).
 #    Lägg nyckeln i .env som OBSIDIAN_API_KEY.
 
-# 3. Stäng webb-UI-porten igen (steg 2), bygg och starta allt:
+# 3. Stäng webb-UI-porten igen (steg 2).
+
+# 4. Engångsinloggning mot Proton (steg 3, INTERAKTIVT — kör i egen terminal):
+docker compose build bridge
+docker compose run --rm -it bridge init
+#   -> login (mejladress, lösenord, ev. 2FA)
+#   -> info  (Bridge-lösenordet -> .env som IMAP_PASS)
+#   -> exit
+
+# 5. Hitta exakt label-namn och starta allt:
+docker compose up -d bridge
+docker compose run --rm mail-importer list-folders   # leta upp t.ex. "Labels/Obsidian"
+#   sätt MAILBOX i .env till det du hittade
 docker compose up -d --build
 docker compose logs -f mail-importer
 ```
@@ -224,46 +282,74 @@ Local REST API-porten (27124) exponeras aldrig mot host-nätverket — bara via
 
 ---
 
-## Steg 3 — Hitta Proton Bridge-porten
+## Steg 3 — Engångskonfiguration av `bridge`-containern
 
-Proton Mail Bridge kör på den maskin där du installerat den och lyssnar bara
-på `localhost`.
+Proton Bridge måste loggas in **en gång**, interaktivt. Det här kan **inte**
+automatiseras (kräver ditt lösenord + ev. 2FA-kod live) — måste köras av dig
+i en riktig terminal, inte något jag/en AI-assistent kan göra åt dig.
 
-1. Öppna **Proton Mail Bridge**-appen.
-2. **Settings → Advanced settings** (äldre versioner: "Advanced" / kugghjulet).
-3. Under **IMAP/SMTP** står:
-   - **IMAP port** — oftast `1143` (SMTP `1025` behövs inte här).
-   - **Security** — `STARTTLS` (default) → `IMAP_STARTTLS=true`, `IMAP_SSL=false`.
-4. Klicka på kontot → **"Mailbox details"** (eller **"Get Bridge password"**) för
-   det **Bridge-genererade lösenordet** — det är `IMAP_PASS`, **inte** ditt
-   vanliga Proton-lösenord.
+### 3a. Bygg och logga in
 
-Sätt i `.env`:
-
-```
-IMAP_HOST=host.docker.internal   # Bridge körs på samma maskin som Docker
-# IMAP_HOST=192.168.x.y          # Bridge körs på en annan maskin i LAN:et
-IMAP_PORT=1143
-IMAP_USER=daniel@valfridsson.net
-IMAP_PASS=<bridge-lösenordet>
+```bash
+docker compose build bridge
+docker compose run --rm -it bridge init
 ```
 
-> `host.docker.internal` funkar på Docker Desktop direkt. På Linux/NAS löser
-> `extra_hosts: ["host.docker.internal:host-gateway"]` (redan satt i compose)
-> namnet till Docker-hosten. Kör Bridge på en annan burk i nätet? Ange den
-> maskinens IP och tillåt anslutningar utifrån i Bridge
-> (Settings → "Connection mode").
+Vänta tills `Welcome to Proton Mail Bridge interactive shell` visas (den
+genererar en GPG-nyckel + initierar sitt lösenordslager första gången — några
+sekunder). Skriv sedan, i den prompten:
 
-### Hitta det exakta label-namnet
+1. `login` → din Proton-adress, lösenord, 2FA-kod om du har det aktiverat.
+2. `info` → visar kontots IMAP/SMTP-uppgifter, inklusive **Bridge-lösenordet**
+   (auto-genererat, långt — **inte** ditt vanliga Proton-lösenord). Klistra in
+   det i `.env` som `IMAP_PASS`.
+3. `exit`.
 
-Proton-labels dyker i Bridge ofta upp som `Labels/<namn>` och mappar som
-`Folders/<namn>`. Lista dem:
+> **Efter `login` startar en engångs-synk** av hela brevlådan (kan ta lång
+> stund beroende på hur mycket post du har). Den är krascha-säker/resumable —
+> du kan lugnt köra `info`/`exit` innan den är klar, den fortsätter i
+> bakgrunden när du startar `bridge` som daemon i nästa steg. Loggen blir
+> under tiden en kontinuerlig ström av `Sync (...): X% ...`-rader som kan göra
+> det svårt att se vad du skriver — dina tangenttryckningar tas ändå emot,
+> bara skriv och tryck Enter. Undvik Ctrl+C (riskerar att döda hela
+> containern eftersom den kördes med `--rm`).
+
+### 3b. Starta som daemon
+
+```bash
+docker compose up -d bridge
+```
+
+Sessionen ligger kvar i volymen — ingen ny inloggning behövs efter det här,
+varken vid omstart av containern eller efter ett NAS-strömavbrott.
+
+### 3c. Hitta det exakta label-namnet
+
+Proton-labels dyker i Bridge upp som egna mappar under `Labels/<namn>`
+(mappar/folders under `Folders/<namn>`) — **inte** bara `<namn>`:
 
 ```bash
 docker compose run --rm mail-importer list-folders
 ```
 
-Sätt sedan t.ex. `MAILBOX=Labels/Obsidian` i `.env`.
+Sätt `MAILBOX=Labels/Obsidian` (eller vad din label heter) i `.env`.
+
+### Alternativ: kör Bridge nativt i stället
+
+Vill du hellre köra Proton Mail Bridge som ett vanligt program på en dator i
+stället för i Docker: installera den från [proton.me/mail/bridge](https://proton.me/mail/bridge)
+(kräver betalplan), hämta Bridge-lösenordet i dess GUI, och sätt i `.env`:
+
+```
+IMAP_HOST=host.docker.internal   # Bridge körs på samma maskin som Docker
+# IMAP_HOST=192.168.x.y          # Bridge körs på en annan maskin i LAN:et
+IMAP_PORT=1143
+```
+
+Ta då bort/kommentera bort `bridge`-tjänsten i `docker-compose.yml` (och dess
+`depends_on` i `mail-importer`). `host.docker.internal` funkar på Docker
+Desktop direkt; på Linux/NAS löser `extra_hosts: host-gateway` (redan satt i
+compose) namnet till Docker-hosten.
 
 ---
 
@@ -281,17 +367,34 @@ Sätt sedan t.ex. `MAILBOX=Labels/Obsidian` i `.env`.
   - Meddelanden utan `Message-ID` får ett syntetiskt `sha256-…@no-message-id.local`.
 - **Per nytt meddelande:**
   1. Parsar avsändare, mottagare (To/Cc), ämne, datum, Message-ID, brödtext.
-     HTML → Markdown med rubriker, listor, tabeller och länkar bevarade.
+     HTML → Markdown med rubriker, listor och länkar bevarade.
      `cid:`-referenser skrivs om till länkar mot de uppladdade bilagorna.
-  2. **Bilagor först** → `PUT` till `Email/attachments/` via Local REST API.
-  3. **Sedan anteckningen** som länkar bilagorna (`![[...]]` för bilder, annars `[[...]]`).
-  4. **`(uidvalidity, uid, message_id)` skrivs till SQLite** — det är själva
+  2. **Alla Proton-labels meddelandet har** slås upp (inte bara den bevakade)
+     — se "Flera labels" nedan.
+  3. **Bilagor först** → `PUT` till `Email/attachments/` via Local REST API.
+  4. **Sedan anteckningen** som länkar bilagorna (`![[...]]` för bilder, annars `[[...]]`).
+  5. **`(uidvalidity, uid, message_id)` skrivs till SQLite** — det är själva
      "klart"-markeringen. Kraschar processen innan dess importeras UID:t om vid
      nästa körning; anteckningen skapas bara om den saknas, så ingen dubblett.
 - **Filnamn:** `{YYYY-MM-DD}-{slug-av-ämne}-{10-tecken-hash-av-message-id}.md` —
   deterministiskt. Befintliga filer **skrivs aldrig över** (existenskontroll
   före varje `PUT`).
 - **Frontmatter:** `date`, `from`, `to`, `subject`, `message_id`, `labels`.
+- **Flera labels i frontmatter:** IMAP visar bara vilken mapp man råkar ha
+  vald — ett meddelande med både labeln `Obsidian` och `Ida` syns bara som
+  liggande i `Labels/Obsidian` om man bara tittar i den bevakade mappen.
+  Importern söker därför igenom **alla** `Labels/*`-mappar i Bridge efter
+  samma Message-ID och tar med alla den hittar i frontmatterns `labels:`.
+  `NOTE_LABELS` i `.env` läggs till som **extra**, statiska taggar utöver de
+  verkliga Proton-labels som hittas (inte längre den enda källan).
+- **HTML-tabeller i mejl:** de allra flesta HTML-mejl (nyhetsbrev, kvitton,
+  automatiska utskick) bygger sin **layout** med `<table>` — decennier av
+  Outlook-kompatibilitetshack — inte för att presentera riktig tabelldata.
+  Rakt av konverterade blir sådana orimliga Markdown-pipe-tabeller (kan bli
+  10-tals påhittade "kolumner" av ren sidlayout). En tabell antas därför vara
+  **riktig data** (blir en riktig Markdown-tabell) bara om den har
+  **`<th>`-rubrikceller** och inte är märkt `role="presentation"` — annars
+  packas den upp till vanliga stycken/rader.
 - **Felhantering:** ett misslyckat Local REST API-anrop → loggas, UID:t
   markeras **inte** (nytt försök nästa körning), kön fortsätter med resten.
   Retry med **exponential backoff, max 3 försök** mot både IMAP och Local REST API.
@@ -309,25 +412,27 @@ Se **`.env.example`** för fullständig lista med kommentarer. De viktigaste:
 
 | Variabel | Default | Beskrivning |
 |---|---|---|
-| `IMAP_HOST` / `IMAP_PORT` | – / `1143` | Proton Bridge |
-| `IMAP_USER` / `IMAP_PASS` | – | Adress + **Bridge**-lösenord |
+| `IMAP_HOST` / `IMAP_PORT` | `bridge` / `143` | `bridge`-containerns socat-forward-port (INTE Bridges egna interna `1143`) |
+| `IMAP_USER` / `IMAP_PASS` | – | Adress + **Bridge**-lösenord (från `info` i steg 3a) |
 | `IMAP_STARTTLS` / `IMAP_SSL` / `IMAP_VERIFY_CERT` | `true` / `false` / `false` | Bridge = STARTTLS, självsignerat |
-| `MAILBOX` | `Obsidian` | Bevakad label/mapp (`list-folders` visar exakt namn) |
+| `MAILBOX` | `Obsidian` | Bevakad label/mapp — oftast `Labels/<namn>` i praktiken, `list-folders` visar exakt namn |
 | `OBSIDIAN_API_KEY` | – | Från Local REST API-pluginet (steg 1e) |
 | `OBSIDIAN_API_URL` | `https://obsidian:27124` | Internt service-namn, aldrig extern IP |
 | `OBSIDIAN_API_VERIFY_TLS` | `false` | Självsignerat cert |
 | `NOTE_FOLDER` / `ATTACHMENT_FOLDER` | `Email` / `Email/attachments` | Mål i valvet |
-| `NOTE_LABELS` | `Obsidian` | Kommaseparerat → frontmatter `labels` |
+| `NOTE_LABELS` | `Obsidian` | Kommaseparerat, läggs till **utöver** de riktiga Proton-labels som upptäcks per mejl |
 | `POLL_INTERVAL_SECONDS` | `300` | Säkerhetsnäts-poll |
 | `IDLE_TIMEOUT_SECONDS` | `60` | IDLE-väntetid / shutdown-svarstid |
 | `RECONNECT_BACKOFF_MAX_SECONDS` | `300` | Max backoff vid nätfel |
 | `API_MAX_RETRIES` | `3` | Försök mot IMAP / Local REST API |
+| `HEARTBEAT_MAX_AGE_SECONDS` | `900` | Docker HEALTHCHECK/autoheal: hur gammal heartbeaten får bli |
 | `OBSIDIAN_BASE_TAG` | `v1.13.7-ls144` | Pinnad LSIO-image-tagg |
 | `OBSIDIAN_WEB_USER` / `OBSIDIAN_WEB_PASSWORD` | `admin` / – | Basic auth för webb-UI, endast engångskonfig |
 | `OBSIDIAN_VAULT_NAME` | `Daniel` | Valvkatalog under `/config` |
 | `LOCAL_REST_API_VERSION` | `5.1.0` | Plugin-version som init-skriptet hämtar |
 | `PUID` / `PGID` | `1000` / `1000` | Fil-ägare i obsidian-containern |
-| `*_MEM_LIMIT` / `*_CPUS` | `1g`/`1.0`, `512m`/`0.75` | Resursgränser |
+| `BRIDGE_VERSION` | `3.26.0-1` | Pinnad Proton Bridge-version (se `bridge/Dockerfile`) |
+| `*_MEM_LIMIT` / `*_CPUS` | se `.env.example` | Resursgränser per tjänst |
 
 ---
 
@@ -337,6 +442,7 @@ Se **`.env.example`** för fullständig lista med kommentarer. De viktigaste:
 docker compose ps                       # status + health
 docker compose logs -f mail-importer    # importloggen
 docker compose logs -f obsidian         # Obsidian / LiveSync / init-skriptet
+docker compose logs -f bridge           # Proton Bridge / sync-status
 docker compose logs -f autoheal         # ser du en omstart den gjort åt dig
 docker compose run --rm mail-importer list-folders   # lista IMAP-mappar
 docker compose restart mail-importer
@@ -348,17 +454,35 @@ docker compose stop                     # graceful (SIGTERM)
   (öppna valvet, slå på community-plugins, konfigurera LiveSync) innan pluginet
   börjar lyssna på 27124. Kolla `docker compose logs obsidian`.
 - **`mail-importer` når inte `obsidian:27124`**: sätt **"Binding Host"** i Local
-  REST API-pluginet till tomt eller `0.0.0.0` (steg 1e).
+  REST API-pluginet till tomt eller `0.0.0.0` (steg 1e) — default är
+  `127.0.0.1`, vilket bara fungerar inuti obsidian-containern själv.
 - **Init-skriptet installerade inget**: `docker compose logs obsidian | grep local-rest-api`.
   Ingen internet vid start? Installera pluginet manuellt via **Browse** i GUI:t.
-- **Inga mejl importeras**: fel `MAILBOX`-namn (kör `list-folders`), eller
-  Bridge-lösenordet är fel.
+- **`bridge` startar inte / loggar "inget lösenordslager hittat"**: engångsinloggningen
+  (steg 3a) är inte gjord än — `docker compose run --rm -it bridge init`.
+- **`bridge` loggar "address already in use"**: någon har ändrat portnumren i
+  `bridge/entrypoint.sh`/`docker-compose.yml` så att socats forward-port
+  krockar med Bridges egen `127.0.0.1`-port. De MÅSTE vara olika portnummer
+  (143↔1143, 25↔1025) — se "Om bridge-containern".
+- **Inga mejl importeras**: fel `MAILBOX`-namn (kör `list-folders` — kom ihåg
+  `Labels/`-prefixet), eller Bridge-lösenordet är fel.
+- **Ett meddelande saknar en label i frontmatter**: `mail-importer` söker
+  igenom alla `Labels/*`-mappar vid importtillfället — labels som läggs till
+  på ett mejl **efter** att det redan importerats syns inte retroaktivt.
+  Ta bort noten + dess SQLite-rad (se nedan) för att importera om den.
+- **Vill tvinga om-import av ett specifikt mejl** (t.ex. efter en kod-fix):
+  ta bort noten via Local REST API (`DELETE /vault/<sökväg>`) och motsvarande
+  rad i SQLite (`DELETE FROM imported WHERE uid = <uid>` i `/data/state.sqlite3`
+  inuti `mail-importer`-containern), starta sedan om `mail-importer`.
 - **Vill tvinga om-import av allt**: ta bort tracking-volymen
   (`docker compose down` + `docker volume rm obsidian-epost-import_epost-import-importer-state`).
   Anteckningar som redan finns i valvet skrivs ändå inte över.
 - **Uppgradera obsidian-imagen**: sätt en nyare `OBSIDIAN_BASE_TAG` i `.env`
   (se [LSIO releases](https://github.com/linuxserver/docker-obsidian/releases)),
   kör `docker compose up -d --build obsidian`.
+- **Uppgradera bridge-imagen**: sätt en nyare `BRIDGE_VERSION` i `.env` (se
+  [Proton Bridge releases](https://github.com/ProtonMail/proton-bridge/releases)),
+  kör `docker compose up -d --build bridge`.
 
 ---
 
@@ -369,10 +493,11 @@ Satta direkt i `docker-compose.yml`:
 | Tjänst | RAM (`mem_limit`) | CPU (`cpus`) | Övrigt |
 |---|---|---|---|
 | `obsidian` | `1g` | `1.0` | `shm_size: 1gb` (krävs av Electron) |
+| `bridge` | `512m` | `0.5` | — |
 | `mail-importer` | `512m` | `0.75` | `stop_grace_period: 90s` |
 | `autoheal` | `64m` | `0.1` | se "Robusthet & självläkning" nedan |
 
-Alla tre tjänster kör med `restart: unless-stopped`. En eventuell bugg kan
+Alla fyra tjänster kör med `restart: unless-stopped`. En eventuell bugg kan
 alltså aldrig svälta CouchDB, Cloudflared eller annat på NAS:en.
 
 ---
@@ -384,7 +509,7 @@ igång av sig själv, precis som `obsidian-nas-sync`. Så här hänger det ihop:
 
 ### Vad som redan är robust by design
 
-- **`restart: unless-stopped`** på alla tre tjänster → när dockerd kommer upp
+- **`restart: unless-stopped`** på alla fyra tjänster → när dockerd kommer upp
   igen efter ett strömavbrott startar Docker om dem automatiskt, oavsett hur
   länge NAS:en var nere. (Enda undantaget: om du körde `docker compose stop`
   manuellt innan avbrottet — då låter Docker dem vara stoppade, som förväntat.)
@@ -396,6 +521,10 @@ igång av sig själv, precis som `obsidian-nas-sync`. Så här hänger det ihop:
 - **IMAP/nätverksfel:** automatisk återanslutning med backoff upp till
   `RECONNECT_BACKOFF_MAX_SECONDS` (default 300 s) — täcker både att Proton
   Bridge inte hunnit starta än och tillfälliga nätverksglapp.
+- **`bridge` behöver ingen ny inloggning vid omstart** — sessionen +
+  GPG-nyckeln/pass-lösenordslagret ligger i den persisterade volymen. En
+  pågående synk är resumable: avbryts den (omstart, strömavbrott) fortsätter
+  den där den var, den börjar inte om från noll.
 - **Krascha-säker SQLite:** WAL-läge + `synchronous=FULL` + att
   "klart"-markeringen (`mark_imported`) är den sista, atomiska operationen i
   varje import. Ett strömavbrott mitt i en import ger i värsta fall att samma
@@ -409,13 +538,14 @@ igång av sig själv, precis som `obsidian-nas-sync`. Så här hänger det ihop:
 ### Det redan lösta gapet: hängda (inte kraschade) containrar
 
 `restart: unless-stopped` triggar bara om **processen faktiskt avslutas**. Om
-Obsidian/Electron fryser utan att kraschen syns som en exit (det vanligaste
-sättet en headless GUI-container "dör" på) förblir containern uppe men
-obrukbar — Docker rapporterar `unhealthy` men startar inget om av sig själv.
+Obsidian/Electron (eller Bridge/socat-forwardningen) fryser utan att kraschen
+syns som en exit (det vanligaste sättet en headless container "dör" på)
+förblir containern uppe men obrukbar — Docker rapporterar `unhealthy` men
+startar inget om av sig själv.
 
 Det täcks av **`autoheal`**-tjänsten: den lyssnar på Dockers hälsostatus för
-alla containrar märkta `autoheal=true` (`obsidian` och `mail-importer`) och
-kör `docker restart` på dem om de är `unhealthy` en stund.
+alla containrar märkta `autoheal=true` (`obsidian`, `bridge` och
+`mail-importer`) och kör `docker restart` på dem om de är `unhealthy` en stund.
 
 > **Avvägning:** `autoheal` kräver att `/var/run/docker.sock` monteras in,
 > vilket i praktiken motsvarar root-åtkomst till hela Docker-hosten. Det är en
@@ -463,19 +593,20 @@ TerraMaster TOS/Linux senare:
   (uid-trackingen) gör frekventa små writes/locks och är särskilt känsligt för
   den långsamma I/O och de rättighets-/notifieringsproblem en Windows-bind-mount
   via WSL2 kan ge — därför named volume.
-- `host.docker.internal` (för Proton Bridge) löser sig automatiskt på Docker
-  Desktop och via `extra_hosts: host-gateway` på Linux.
+- `host.docker.internal` (bara relevant om du kör Bridge nativt i stället för
+  i `bridge`-containern) löser sig automatiskt på Docker Desktop och via
+  `extra_hosts: host-gateway` på Linux.
 
 ### Vad du ändrar i `.env` när du flyttar till NAS:en
 
 | Variabel | Varför |
 |---|---|
-| `IMAP_HOST` | Om Bridge inte kör på samma maskin som Docker — sätt Bridge-maskinens IP |
 | `PUID` / `PGID` | Matcha din NAS-användare (kör `id <användare>` på NAS:en via SSH) |
 | `TZ` | Vid behov |
 | `*_MEM_LIMIT` / `*_CPUS` | Om NAS:en har annan resursbudget |
 
-Allt annat är oförändrat. Bygg om på NAS:en med `docker compose up -d --build`.
+Allt annat är oförändrat (inklusive `IMAP_HOST=bridge` — Bridge körs i Docker
+på båda maskinerna). Bygg om på NAS:en med `docker compose up -d --build`.
 
 ### Named volumes — namn och innehåll
 
@@ -484,6 +615,7 @@ Faktiska volymnamn = projektnamn + volymnyckel (`docker volume ls | grep epost-i
 | Volym | Innehåll | Behöver flyttas? |
 |---|---|---|
 | `obsidian-epost-import_epost-import-obsidian-config` | Obsidian-config, valv, plugins, LiveSync-inställningar + E2E-passphrase, Local REST API-nyckeln | **Nej** — gör om engångskonfigen (steg 1) på NAS:en. Valvet återsynkas ändå från CouchDB. |
+| `obsidian-epost-import_epost-import-bridge-config` | Bridges session, GPG-nyckel + pass-lösenordslager | **Rekommenderat men inte nödvändigt.** Flyttar du den inte måste du köra engångsinloggningen (steg 3a, med 2FA) igen på NAS:en — själva mejlkontot påverkas inte. |
 | `obsidian-epost-import_epost-import-importer-state` | `state.sqlite3` — vilka UID:n/Message-ID:n som redan importerats | **Valfritt.** Flyttar du den inte gör importern en engångs-omgenomgång av hela labeln vid första körningen på NAS:en. Inga dubbletter skapas (deterministiska filnamn, filer skrivs aldrig över) — bara extra `fanns redan`-loggar. |
 
 ### Flytta / säkerhetskopiera en named volume mellan maskiner
@@ -538,8 +670,9 @@ docker compose up -d
 
 ```bash
 git clone <repo> && cd obsidian-epost-import
-cp .env.example .env   # fyll i, justera IMAP_HOST/PUID/PGID
+cp .env.example .env   # fyll i, justera PUID/PGID
 docker compose up -d --build obsidian   # gör om steg 1 (engångskonfig)
 # lägg OBSIDIAN_API_KEY i .env, stäng webb-UI-porten (steg 2)
+docker compose run --rm -it bridge init   # gör om steg 3a (engångsinloggning)
 docker compose up -d --build
 ```

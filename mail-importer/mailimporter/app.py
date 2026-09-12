@@ -27,8 +27,8 @@ class Runner:
             max_retries=cfg.api_max_retries,
             should_stop=lambda: self._stop,
         )
-        self._proc = Processor(self._obs, self._state, cfg)
         self._imap = ImapSource(cfg)
+        self._proc = Processor(self._obs, self._state, cfg, self._imap)
 
     # ---- livscykel ----------------------------------------------
     def _request_stop(self, signum, _frame) -> None:

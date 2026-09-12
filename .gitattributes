@@ -4,3 +4,4 @@ obsidian/custom-cont-init.d/*       text eol=lf
 mail-importer/mailimporter/*.py     text eol=lf
 Dockerfile                          text eol=lf
 *.yml                               text eol=lf
+bridge/gpg-batch-params             text eol=lf

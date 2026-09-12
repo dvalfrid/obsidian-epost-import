@@ -66,10 +66,20 @@ elif ! grep -q "\"${PLUGIN_ID}\"" "${CP_FILE}"; then
     log "lade till ${PLUGIN_ID} i community-plugins.json"
 fi
 
-# --- Rätt ägare så Obsidian (kör som 'abc') kan läsa ----------
+# --- Rätt ägare så Obsidian (kör som 'abc') kan läsa/skriva ---
+# VAULT_DIR kan ha skapats av mkdir -p ovan som root vid allra
+# första körningen (om valvet inte fanns än) — utan att chowna
+# valvroten själv, bara .obsidian, kan Obsidian inte öppna den
+# ("no permission to access folder"). Chownas inte rekursivt här:
+# billigt, och LiveSync/Obsidian äger sedan själva allt de skapar.
+# OBS_DIR chownas rekursivt (bara vår plugin-katalog, litet innehåll
+# — och tidiga idempotens-checken ovan gör att det inte sker vid
+# varje boot när pluginet redan ligger på plats).
 if command -v lsiown >/dev/null 2>&1; then
+    lsiown abc:abc "${VAULT_DIR}"
     lsiown -R abc:abc "${OBS_DIR}"
 else
+    chown "${PUID:-1000}:${PGID:-1000}" "${VAULT_DIR}" 2>/dev/null || true
     chown -R "${PUID:-1000}:${PGID:-1000}" "${OBS_DIR}" 2>/dev/null || true
 fi
 

@@ -75,8 +75,8 @@ services:
     #  KOMMENTERA sedan raden igen och kör `docker compose up -d`.
     #  Bindningen till 127.0.0.1 gör att porten aldrig når nätet
     #  utanför NAS:en.
-    # ports:
-    #   - "127.0.0.1:3001:3001"
+    ports:
+      - "127.0.0.1:3001:3001"
     # --------------------------------------------------------
 
     # Local REST API (27124/https, självsignerat) exponeras MEDVETET
@@ -105,6 +105,59 @@ services:
       timeout: 10s
       retries: 5
       start_period: 180s
+
+  # ----------------------------------------------------------
+  #  Proton Mail Bridge — headless, körs helt i Docker så att
+  #  hela stacken (även på NAS:en) är oberoende av en alltid-
+  #  påslagen Windows/Mac-dator.
+  #
+  #  EGEN image (./bridge/Dockerfile), inte en färdig från Docker
+  #  Hub: de undersökta community-imagerna (t.ex. shenxn/protonmail-
+  #  bridge) hade slutat publiceras ~17 månader tillbaka trots att
+  #  källkoden fortsatte uppdateras — dvs. deras byggpipeline hade
+  #  gått sönder tyst. Vår egen image hämtar Protons OFFICIELLA
+  #  .deb direkt och verifierar OpenPGP-signaturen mot Protons
+  #  pinnade nyckel innan installation. Se bridge/Dockerfile och
+  #  CLAUDE.md för detaljer.
+  #
+  #  ENGÅNGSKONFIGURATION (interaktiv, måste köras av dig i en
+  #  riktig terminal — se README "Steg 3"):
+  #    docker compose run --rm -it bridge init
+  #  -> login -> följ prompten (lösenord + ev. 2FA) -> info
+  #  (visar Bridge-lösenordet du ska lägga i .env som IMAP_PASS)
+  #  -> exit. Sessionen sparas i named volume och överlever
+  #  omstart — ingen ny inloggning behövs efter det.
+  # ----------------------------------------------------------
+  bridge:
+    build:
+      context: ./bridge
+      args:
+        # Pinnad version. Nyare finns på:
+        # https://github.com/ProtonMail/proton-bridge/releases
+        BRIDGE_VERSION: ${BRIDGE_VERSION:-3.26.0-1}
+    image: obsidian-epost-import/bridge:latest
+    container_name: epost-import-bridge
+    restart: unless-stopped
+    labels:
+      # Låter autoheal-tjänsten starta om containern om Bridge (eller
+      # socat-forwardningen) hänger sig utan att processen kraschar.
+      - "autoheal=true"
+    volumes:
+      # Bridges konto/session + GPG-nyckel/pass-lösenordslager.
+      # Förlorar du den måste du köra `init`-inloggningen igen
+      # (ingen data går förlorad i själva mejlkontot, bara den
+      # lokala sessionen).
+      - epost-import-bridge-config:/root
+    networks:
+      - epost-import-net
+    # IMAP (143) och SMTP (25, oanvänd här) — socats forward-portar
+    # (se bridge/entrypoint.sh), bara internt i epost-import-net,
+    # aldrig publicerat mot host-nätverket.
+    expose:
+      - "143"
+      - "25"
+    mem_limit: ${BRIDGE_MEM_LIMIT:-512m}
+    cpus: ${BRIDGE_CPUS:-0.5}
 
   # ----------------------------------------------------------
   #  Mail-importer — IMAP (Proton Bridge) -> Local REST API
@@ -148,10 +201,15 @@ services:
         # Skulle healthchecken strula på första setupen: byt till
         # `service_started` (importern väntar ändå in API:t själv).
         condition: service_healthy
+      # bridge har ingen HEALTHCHECK i basimagen — importern väntar
+      # ändå in IMAP med egen retry/backoff (imap_source.py).
+      bridge:
+        condition: service_started
     # Låt en påbörjad import bli klar vid `docker compose stop`.
     stop_grace_period: 90s
-    # För värdar där Proton Bridge kör på Docker-hosten (Linux/NAS).
-    # Ofarligt på Docker Desktop.
+    # Bara relevant om du kör Bridge nativt på Docker-hosten i
+    # stället för i bridge-containern ovan (satt IMAP_HOST till
+    # host.docker.internal i .env då). Ofarligt att ha kvar annars.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     mem_limit: ${IMPORTER_MEM_LIMIT:-512m}
@@ -205,9 +263,9 @@ networks:
     driver: bridge
 
 # Docker-hanterade named volumes. Faktiska namn blir prefixade med
-# projektnamnet: obsidian-epost-import_epost-import-obsidian-config
-# och obsidian-epost-import_epost-import-importer-state.
+# projektnamnet, t.ex. obsidian-epost-import_epost-import-obsidian-config.
 # Se README ("Portabilitet") för hur man flyttar dem mellan maskiner.
 volumes:
   epost-import-obsidian-config:
   epost-import-importer-state:
+  epost-import-bridge-config:

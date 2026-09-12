@@ -33,10 +33,12 @@ class ImapSource:
         self._cfg = cfg
         self._client: IMAPClient | None = None
         self._idling = False
+        self._label_folders_cache: list[str] | None = None
 
     # ---- anslutning ------------------------------------------------
     def connect(self) -> None:
         self.logout()
+        self._label_folders_cache = None
         ctx = ssl.create_default_context()
         if not self._cfg.imap_verify_cert:
             ctx.check_hostname = False
@@ -95,6 +97,42 @@ class ImapSource:
         if not data:
             return None
         return data.get(b"BODY[]") or data.get(b"RFC822")
+
+    def _label_folders(self) -> list[str]:
+        """Proton-labels dyker upp i Bridge som egna mappar under
+        'Labels/'. Cachas per anslutning — listas bara en gång."""
+        if self._label_folders_cache is None:
+            self._label_folders_cache = [
+                f for f in self.list_folders() if f.startswith("Labels/")
+            ]
+        return self._label_folders_cache
+
+    def discover_labels(self, message_id: str) -> list[str]:
+        """Ett meddelande kan ha flera Proton-labels samtidigt, men IMAP
+        visar bara vilken mapp vi råkar ha vald. Sök igenom alla
+        Labels/*-mappar efter samma Message-ID för att hitta ALLA labels
+        meddelandet har. Returnerar kort labelnamn (utan 'Labels/'-
+        prefix). VÄXLAR vilken mapp som är vald på anslutningen — anroparen
+        måste själv välja tillbaka den bevakade mappen efteråt.
+
+        En trasig anslutning (NETWORK_ERRORS) bubblar vidare direkt så att
+        huvudloopen återansluter. Övriga fel för en enskild mapp loggas
+        och hoppas över, sökningen fortsätter med resten."""
+        client = self._require()
+        found: list[str] = []
+        needle = f"<{message_id}>"
+        for folder in self._label_folders():
+            try:
+                client.select_folder(folder, readonly=True)
+                uids = client.search(["HEADER", "Message-ID", needle])
+            except NETWORK_ERRORS:
+                raise
+            except Exception:  # noqa: BLE001 - en trasig mapp ska inte fälla resten
+                log.warning("kunde inte söka Message-ID i %r", folder, exc_info=True)
+                continue
+            if uids:
+                found.append(folder.split("/", 1)[1])
+        return found
 
     def idle_wait(self, timeout: int) -> bool:
         """Blockerar i IMAP IDLE upp till ``timeout`` sekunder. Returnerar

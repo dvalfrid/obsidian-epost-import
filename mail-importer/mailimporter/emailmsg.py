@@ -73,16 +73,70 @@ def _parse_date(msg: EmailMessage) -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_layout_table(table) -> bool:
+    """E-postklienter/utskick bygger nästan uteslutande sina layouter med
+    <table> (decennier av Outlook-kompatibilitetshack) i stället för CSS
+    — även rutnät med 10-tals "kolumner" som bara är ren sidlayout, inte
+    tabelldata. En tabell antas vara riktig data ENDAST om den har
+    <th>-rubrikceller; annars räknas den som layout. Explicit
+    role="presentation" (vanligt i moderna e-postmallar) räknas alltid
+    som layout oavsett <th>."""
+    if (table.get("role") or "").strip().lower() == "presentation":
+        return True
+    return not table.find_all("th")
+
+
+_BLOCK_TAGS = {
+    "p", "div", "table", "ul", "ol", "li",
+    "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre",
+}
+
+
+def _unwrap_layout_tables(soup: BeautifulSoup) -> None:
+    """Packar upp layout-tabeller (se _is_layout_table) till vanliga
+    stycken så de inte blir oläsliga Markdown-pipe-tabeller. Riktiga
+    datatabeller (har <th>) lämnas orörda och blir riktiga Markdown-
+    tabeller. Bearbetar innersta tabeller först (reversed) så nästlade
+    layout-tabeller packas upp korrekt — en cell kan redan innehålla en
+    tidigare uppackad nästlad tabell (nu en <div>)."""
+    for table in reversed(soup.find_all("table")):
+        if not _is_layout_table(table):
+            continue
+        replacement = soup.new_tag("div")
+        for row in table.find_all("tr"):
+            for cell in row.find_all(["td", "th"]):
+                if not cell.get_text(strip=True) and not cell.find(["img"]):
+                    continue  # tom cell (ren spacer) -> hoppa över
+                contents = list(cell.contents)
+                block = soup.new_tag("div")
+                if any(getattr(c, "name", None) in _BLOCK_TAGS for c in contents):
+                    # Innehåller redan block-element (t.ex. en uppackad
+                    # nästlad tabell) — flytta som de är. <p> får ALDRIG
+                    # innehålla <div>/<table> (ogiltig HTML som annars
+                    # tolkas om oförutsägbart av markdownify).
+                    block.extend(contents)
+                else:
+                    # Bara text/inline-innehåll — <p> ger garanterat
+                    # blankrad mellan celler i Markdown-utfallet.
+                    inner = soup.new_tag("p")
+                    inner.extend(contents)
+                    block.append(inner)
+                replacement.append(block)
+        table.replace_with(replacement)
+
+
 def _html_to_markdown(html: str) -> str:
     soup = BeautifulSoup(html, "lxml")
     for tag in soup(["script", "style", "head", "meta", "link", "title"]):
         tag.decompose()
+    _unwrap_layout_tables(soup)
     md_text = _md(
         str(soup),
         heading_style="ATX",   # bevarar rubriker som #, ##, ...
         bullets="-",           # listor
     )
-    # markdownify konverterar <table> till pipe-tabeller och <a> till länkar.
+    # markdownify konverterar kvarvarande <table> till pipe-tabeller
+    # och <a> till länkar.
     md_text = re.sub(r"\n{3,}", "\n\n", md_text).strip()
     return md_text or "_(tomt HTML-innehåll)_"
 

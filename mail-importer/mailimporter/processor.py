@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from .config import Config
 from .emailmsg import parse_email
+from .imap_source import ImapSource
 from .note_builder import attachment_filename, build_note, note_filename
 from .obsidian_api import ObsidianClient
 from .state import State
@@ -25,10 +26,13 @@ class _AttachmentPlan:
 
 
 class Processor:
-    def __init__(self, obs: ObsidianClient, state: State, cfg: Config) -> None:
+    def __init__(
+        self, obs: ObsidianClient, state: State, cfg: Config, imap: ImapSource
+    ) -> None:
         self._obs = obs
         self._state = state
         self._cfg = cfg
+        self._imap = imap
 
     def process(self, uidvalidity: int, uid: int, raw: bytes) -> None:
         """Bearbetar ETT meddelande. Kastar vidare vid fel så att anroparen
@@ -49,6 +53,18 @@ class Processor:
             )
             self._state.mark_imported(uidvalidity, uid, parsed.message_id, existing)
             return
+
+        # Ett mejl kan ha flera Proton-labels samtidigt (Obsidian + Ida
+        # t.ex.) — IMAP visar bara vilken mapp vi råkar ha vald, så vi
+        # söker aktivt igenom alla Labels/*-mappar efter samma Message-ID.
+        # discover_labels() växlar vilken mapp som är vald -> väl tillbaka
+        # den bevakade mappen direkt efteråt innan vi fortsätter.
+        proton_labels = self._imap.discover_labels(parsed.message_id)
+        self._imap.select()
+        labels = list(proton_labels)
+        for extra in self._cfg.note_labels:
+            if extra not in labels:
+                labels.append(extra)
 
         plans: list[_AttachmentPlan] = []
         for att in parsed.attachments:
@@ -74,7 +90,7 @@ class Processor:
             )
 
         # 2. Anteckningen som länkar bilagorna.
-        content = build_note(parsed, plans, self._cfg.note_labels).encode("utf-8")
+        content = build_note(parsed, plans, labels).encode("utf-8")
         created = self._obs.create_file(note_path, content, _MARKDOWN_CT)
         log.info(
             "UID %s: anteckning %s -> %s",
