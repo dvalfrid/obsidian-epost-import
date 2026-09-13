@@ -778,3 +778,25 @@ docker compose up -d
 
 ...or from source: `git clone` instead of the two `curl` lines, and
 `docker compose up -d --build` at the end.
+
+---
+
+## License
+
+This project's own code is [MIT-licensed](LICENSE).
+
+Third-party components keep their own licenses and aren't relicensed by
+being used here:
+
+- **Proton Mail Bridge** (built into the `bridge` image) is
+  [GPLv3](https://github.com/ProtonMail/proton-bridge) — see
+  "About the `bridge` container" above for how this repo builds and
+  verifies it.
+- **Obsidian** (bundled in the `obsidian` image via the LinuxServer.io base)
+  is proprietary freeware; see [Obsidian's own terms](https://obsidian.md/license).
+- The **obsidian-local-rest-api** and **Self-hosted LiveSync** plugins, and
+  the Python dependencies in `mail-importer/requirements.txt`, are all
+  separately open source under their own permissive/GPL-compatible licenses.
+
+See [SECURITY.md](SECURITY.md) for the security policy and
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
