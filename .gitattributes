@@ -1,4 +1,4 @@
-# Skript som körs i Linux-containrar måste ha LF, även vid Windows-checkout.
+# Scripts that run in Linux containers must have LF, even on a Windows checkout.
 *.sh                                text eol=lf
 obsidian/custom-cont-init.d/*       text eol=lf
 mail-importer/mailimporter/*.py     text eol=lf

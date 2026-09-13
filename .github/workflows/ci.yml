@@ -35,21 +35,21 @@ jobs:
 
       - name: Validate docker-compose.yml
         run: |
-          # mail-importer har env_file: .env — compose kräver att filen
-          # finns även bara för att parsa/validera configen. .env checkas
-          # aldrig in; den här är bara en tom platshållare för CI.
+          # mail-importer has env_file: .env — compose requires the file to
+          # exist just to parse/validate the config. .env is never
+          # committed; this is just an empty placeholder for CI.
           touch .env
           docker compose config --quiet
         env:
-          # Bara för att tillfredsställa OBSIDIAN_WEB_PASSWORD:?-kravet.
+          # Only to satisfy the OBSIDIAN_WEB_PASSWORD:? requirement.
           OBSIDIAN_WEB_PASSWORD: ci-placeholder
 
-  # Bygger de tre images (obsidian, bridge, mail-importer) på varje körning
-  # så en trasig Dockerfile fäller en PR. Pushar till GHCR bara efter att
-  # `verify` klarat sig:
-  #   - push till main  -> :main  och  :sha-<kort>   (bleeding edge, för test)
-  #   - tag vX.Y.Z       -> :X.Y.Z  :X.Y  :X  :latest  (en riktig release)
-  #   - pull request      -> bygger bara, pushar inget
+  # Builds all three images (obsidian, bridge, mail-importer) on every run
+  # so a broken Dockerfile fails a PR. Only pushes to GHCR once `verify`
+  # has passed:
+  #   - push to main   -> :main  and  :sha-<short>   (bleeding edge, for testing)
+  #   - tag vX.Y.Z      -> :X.Y.Z  :X.Y  :X  :latest  (a real release)
+  #   - pull request     -> build only, nothing pushed
   images:
     needs: verify
     runs-on: ubuntu-latest
@@ -83,8 +83,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
-          # `latest` sätts automatiskt bara på den senaste semver-taggen
-          # (metadata-actions default: latest=auto).
+          # `latest` is only set automatically on the newest semver tag
+          # (metadata-action's default: latest=auto).
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -102,6 +102,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-          # Bygger bara linux/amd64 (de flesta NAS-Docker-värdar, inkl.
-          # TerraMaster F4-424 Pro). Lägg till platforms: linux/amd64,linux/arm64
-          # (kräver docker/setup-qemu-action) för att även serva ARM-NAS.
+          # Only builds linux/amd64 (most NAS Docker hosts, including the
+          # TerraMaster F4-424 Pro). Add platforms: linux/amd64,linux/arm64
+          # (requires docker/setup-qemu-action) to also serve ARM NAS units.

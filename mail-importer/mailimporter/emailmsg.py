@@ -43,7 +43,7 @@ def _decode(value: str | None) -> str:
         return ""
     try:
         return str(make_header(decode_header(value))).strip()
-    except Exception:  # noqa: BLE001 - trasiga headers ska inte fälla importen
+    except Exception:  # noqa: BLE001 - malformed headers shouldn't fail the import
         return str(value).strip()
 
 
@@ -74,13 +74,13 @@ def _parse_date(msg: EmailMessage) -> datetime:
 
 
 def _is_layout_table(table) -> bool:
-    """E-postklienter/utskick bygger nästan uteslutande sina layouter med
-    <table> (decennier av Outlook-kompatibilitetshack) i stället för CSS
-    — även rutnät med 10-tals "kolumner" som bara är ren sidlayout, inte
-    tabelldata. En tabell antas vara riktig data ENDAST om den har
-    <th>-rubrikceller; annars räknas den som layout. Explicit
-    role="presentation" (vanligt i moderna e-postmallar) räknas alltid
-    som layout oavsett <th>."""
+    """Email clients/newsletters build their layouts almost exclusively with
+    <table> (decades of Outlook-compatibility hacks) instead of CSS — even
+    grids with dozens of "columns" that are really just page layout, not
+    tabular data. A table is only assumed to be real data if it has <th>
+    header cells; otherwise it's treated as layout. An explicit
+    role="presentation" (common in modern email templates) always counts as
+    layout regardless of <th>."""
     if (table.get("role") or "").strip().lower() == "presentation":
         return True
     return not table.find_all("th")
@@ -93,12 +93,12 @@ _BLOCK_TAGS = {
 
 
 def _unwrap_layout_tables(soup: BeautifulSoup) -> None:
-    """Packar upp layout-tabeller (se _is_layout_table) till vanliga
-    stycken så de inte blir oläsliga Markdown-pipe-tabeller. Riktiga
-    datatabeller (har <th>) lämnas orörda och blir riktiga Markdown-
-    tabeller. Bearbetar innersta tabeller först (reversed) så nästlade
-    layout-tabeller packas upp korrekt — en cell kan redan innehålla en
-    tidigare uppackad nästlad tabell (nu en <div>)."""
+    """Unwraps layout tables (see _is_layout_table) into plain paragraphs so
+    they don't turn into unreadable Markdown pipe tables. Real data tables
+    (with <th>) are left alone and become real Markdown tables. Processes
+    the innermost tables first (reversed) so nested layout tables get
+    unwrapped correctly — a cell may already contain a previously unwrapped
+    nested table (now a <div>)."""
     for table in reversed(soup.find_all("table")):
         if not _is_layout_table(table):
             continue
@@ -106,18 +106,18 @@ def _unwrap_layout_tables(soup: BeautifulSoup) -> None:
         for row in table.find_all("tr"):
             for cell in row.find_all(["td", "th"]):
                 if not cell.get_text(strip=True) and not cell.find(["img"]):
-                    continue  # tom cell (ren spacer) -> hoppa över
+                    continue  # empty cell (pure spacer) -> skip
                 contents = list(cell.contents)
                 block = soup.new_tag("div")
                 if any(getattr(c, "name", None) in _BLOCK_TAGS for c in contents):
-                    # Innehåller redan block-element (t.ex. en uppackad
-                    # nästlad tabell) — flytta som de är. <p> får ALDRIG
-                    # innehålla <div>/<table> (ogiltig HTML som annars
-                    # tolkas om oförutsägbart av markdownify).
+                    # Already contains block elements (e.g. an unwrapped
+                    # nested table) — move them as-is. <p> must NEVER
+                    # contain <div>/<table> (invalid HTML that markdownify
+                    # would otherwise reinterpret unpredictably).
                     block.extend(contents)
                 else:
-                    # Bara text/inline-innehåll — <p> ger garanterat
-                    # blankrad mellan celler i Markdown-utfallet.
+                    # Plain text/inline content only — <p> guarantees a
+                    # blank line between cells in the Markdown output.
                     inner = soup.new_tag("p")
                     inner.extend(contents)
                     block.append(inner)
@@ -132,13 +132,13 @@ def _html_to_markdown(html: str) -> str:
     _unwrap_layout_tables(soup)
     md_text = _md(
         str(soup),
-        heading_style="ATX",   # bevarar rubriker som #, ##, ...
-        bullets="-",           # listor
+        heading_style="ATX",   # preserves headings as #, ##, ...
+        bullets="-",           # lists
     )
-    # markdownify konverterar kvarvarande <table> till pipe-tabeller
-    # och <a> till länkar.
+    # markdownify converts any remaining <table> to pipe tables and <a> to
+    # links.
     md_text = re.sub(r"\n{3,}", "\n\n", md_text).strip()
-    return md_text or "_(tomt HTML-innehåll)_"
+    return md_text or "_(empty HTML content)_"
 
 
 def parse_email(raw_bytes: bytes) -> ParsedEmail:
@@ -146,7 +146,7 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
         raw_bytes, policy=policy.default
     )
 
-    subject = _decode(msg["Subject"]) or "(inget ämne)"
+    subject = _decode(msg["Subject"]) or "(no subject)"
     from_ = ", ".join(_addr_list(msg, "From")) or _decode(msg["From"])
     to = _addr_list(msg, "To")
     cc = _addr_list(msg, "Cc")
@@ -158,7 +158,7 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
         digest = hashlib.sha256(raw_bytes).hexdigest()[:32]
         message_id = f"sha256-{digest}@no-message-id.local"
         synthetic = True
-        log.warning("Meddelande saknar Message-ID — syntetiskt id: %s", message_id)
+        log.warning("Message has no Message-ID — using synthetic id: %s", message_id)
 
     html_body: str | None = None
     text_body: str | None = None
@@ -182,7 +182,7 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
                 cid = cid.strip().strip("<>")
             attachments.append(
                 Attachment(
-                    filename=filename or f"bilaga-{len(attachments) + 1}",
+                    filename=filename or f"attachment-{len(attachments) + 1}",
                     content=payload,
                     content_type=ctype or "application/octet-stream",
                     content_id=cid or None,
@@ -205,9 +205,9 @@ def parse_email(raw_bytes: bytes) -> ParsedEmail:
     if html_body:
         body_markdown = _html_to_markdown(html_body)
     elif text_body:
-        body_markdown = text_body.strip() or "_(tom brödtext)_"
+        body_markdown = text_body.strip() or "_(empty body)_"
     else:
-        body_markdown = "_(inget läsbart textinnehåll)_"
+        body_markdown = "_(no readable text content)_"
 
     return ParsedEmail(
         message_id=message_id,

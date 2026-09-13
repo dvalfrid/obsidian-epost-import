@@ -1,7 +1,7 @@
-# Miljövariabler med lösenord och API-nycklar — committas ALDRIG
+# Environment variables with passwords and API keys — NEVER committed
 .env
 
-# Lokal state / data
+# Local state / data
 /data/
 *.sqlite3
 *.sqlite3-wal

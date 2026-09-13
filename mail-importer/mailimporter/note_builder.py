@@ -18,27 +18,27 @@ class _AttachmentLike(Protocol):
 
 
 def short_hash(message_id: str, length: int = 10) -> str:
-    """Kort, deterministisk hash av Message-ID — används i filnamn."""
+    """Short, deterministic hash of the Message-ID — used in filenames."""
     return hashlib.sha1(message_id.encode("utf-8")).hexdigest()[:length]
 
 
 def note_filename(date: datetime, subject: str, message_id: str) -> str:
-    """{YYYY-MM-DD}-{slug-av-ämne}-{kort-hash}.md — deterministiskt och
-    kollisionssäkert mot befintliga anteckningar."""
-    slug = slugify(subject, max_length=80) or "inget-amne"
+    """{YYYY-MM-DD}-{subject-slug}-{short-hash}.md — deterministic and
+    collision-safe against existing notes."""
+    slug = slugify(subject, max_length=80) or "no-subject"
     return f"{date.strftime('%Y-%m-%d')}-{slug}-{short_hash(message_id)}.md"
 
 
 def attachment_filename(message_id: str, original: str) -> str:
-    """Deterministiskt bilagenamn med Message-ID-hash som prefix så att två
-    mejl med likadant heta bilagor aldrig krockar."""
-    original = original or "bilaga"
+    """Deterministic attachment filename with the Message-ID hash as a
+    prefix, so two emails with identically named attachments never collide."""
+    original = original or "attachment"
     dot = original.rfind(".")
     if dot > 0:
         stem, ext = original[:dot], original[dot:]
     else:
         stem, ext = original, ""
-    stem = slugify(stem, max_length=60) or "bilaga"
+    stem = slugify(stem, max_length=60) or "attachment"
     ext = re.sub(r"[^A-Za-z0-9.]", "", ext).lower()
     return f"{short_hash(message_id)}-{stem}{ext}"
 
@@ -90,19 +90,19 @@ def build_note(
         "",
         f"# {parsed.subject}",
         "",
-        f"- **Från:** {parsed.from_ or '—'}",
-        f"- **Till:** {', '.join(parsed.to) if parsed.to else '—'}",
+        f"- **From:** {parsed.from_ or '—'}",
+        f"- **To:** {', '.join(parsed.to) if parsed.to else '—'}",
     ]
     if parsed.cc:
-        lines.append(f"- **Kopia:** {', '.join(parsed.cc)}")
+        lines.append(f"- **Cc:** {', '.join(parsed.cc)}")
     lines += [
-        f"- **Datum:** {parsed.date.isoformat()}",
+        f"- **Date:** {parsed.date.isoformat()}",
         f"- **Message-ID:** `{parsed.message_id}`",
         "",
     ]
 
     if attachments:
-        lines.append("## Bilagor")
+        lines.append("## Attachments")
         lines.append("")
         for att in attachments:
             link = f"![[{att.vault_path}]]" if _is_image(att.vault_path) else f"[[{att.vault_path}]]"

@@ -3,11 +3,11 @@ from __future__ import annotations
 import sys
 
 _USAGE = """\
-Användning: python -m mailimporter [kommando]
+Usage: python -m mailimporter [command]
 
-  (inget)        Kör importern i loop (IMAP IDLE + periodisk poll).
-  list-folders   Anslut till IMAP och lista alla mappar/labels, avsluta.
-  healthcheck    Kontrollera heartbeat-filen (används av Docker HEALTHCHECK).
+  (none)         Run the importer in a loop (IMAP IDLE + periodic poll).
+  list-folders   Connect to IMAP, list all folders/labels, then exit.
+  healthcheck    Check the heartbeat file (used by Docker HEALTHCHECK).
 """
 
 
@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         print(_USAGE)
         return 0
 
-    print(f"Okänt kommando: {cmd!r}\n\n{_USAGE}", file=sys.stderr)
+    print(f"Unknown command: {cmd!r}\n\n{_USAGE}", file=sys.stderr)
     return 2
 
 

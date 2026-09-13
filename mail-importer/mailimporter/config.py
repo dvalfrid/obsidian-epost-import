@@ -18,13 +18,13 @@ def _int(name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError as exc:
-        raise SystemExit(f"Miljövariabeln {name} måste vara ett heltal (fick {raw!r})") from exc
+        raise SystemExit(f"Environment variable {name} must be an integer (got {raw!r})") from exc
 
 
 def _str(name: str, default: str | None = None, *, required: bool = False) -> str:
     val = os.environ.get(name, default)
     if required and (val is None or val.strip() == ""):
-        raise SystemExit(f"Miljövariabeln {name} måste vara satt")
+        raise SystemExit(f"Environment variable {name} must be set")
     return (val or "").strip()
 
 
@@ -45,18 +45,18 @@ class Config:
     obsidian_api_key: str
     obsidian_verify_tls: bool
 
-    # Valv-layout
+    # Vault layout
     note_folder: str
     attachment_folder: str
     note_labels: list[str]
 
-    # Körning
+    # Runtime
     poll_interval: int
     idle_timeout: int
     reconnect_backoff_max: int
     api_max_retries: int
 
-    # Lokalt
+    # Local
     state_db_path: str
     heartbeat_path: str
     log_level: str

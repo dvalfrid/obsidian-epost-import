@@ -30,16 +30,16 @@ class Runner:
         self._imap = ImapSource(cfg)
         self._proc = Processor(self._obs, self._state, cfg, self._imap)
 
-    # ---- livscykel ----------------------------------------------
+    # ---- lifecycle ----------------------------------------------
     def _request_stop(self, signum, _frame) -> None:
         log.info(
-            "Signal %s mottagen — avslutar när pågående import är klar",
+            "Received signal %s — exiting once the in-progress import finishes",
             signal.Signals(signum).name,
         )
         self._stop = True
 
     def _sleep(self, seconds: float) -> None:
-        """Avbrytbar sömn."""
+        """Interruptible sleep."""
         deadline = time.monotonic() + seconds
         while not self._stop and time.monotonic() < deadline:
             time.sleep(min(1.0, deadline - time.monotonic()))
@@ -49,29 +49,29 @@ class Runner:
             with open(self._cfg.heartbeat_path, "w", encoding="ascii") as fh:
                 fh.write(str(int(time.time())))
         except OSError as exc:
-            log.debug("Kunde inte skriva heartbeat: %s", exc)
+            log.debug("Could not write heartbeat: %s", exc)
 
     def _wait_for_obsidian(self) -> None:
         delay = 5
         while not self._stop:
             if self._obs.ping():
-                log.info("Local REST API svarar (%s)", self._cfg.obsidian_api_url)
+                log.info("Local REST API is responding (%s)", self._cfg.obsidian_api_url)
                 return
             log.warning(
-                "Väntar på Local REST API (%s) — nytt försök om %ss",
+                "Waiting for the Local REST API (%s) — retrying in %ss",
                 self._cfg.obsidian_api_url, delay,
             )
             self._sleep(delay)
             delay = min(delay * 2, 60)
 
-    # ---- arbete ------------------------------------------------
+    # ---- work ------------------------------------------------
     def _run_once(self) -> None:
         uidvalidity = self._imap.select()
         stored = self._state.get_uidvalidity(self._cfg.mailbox)
         if stored is not None and stored != uidvalidity:
             log.warning(
-                "UIDVALIDITY för %r ändrades (%s -> %s) — "
-                "faller tillbaka på deduplicering via Message-ID",
+                "UIDVALIDITY for %r changed (%s -> %s) — "
+                "falling back to deduplication via Message-ID",
                 self._cfg.mailbox, stored, uidvalidity,
             )
         self._state.set_uidvalidity(self._cfg.mailbox, uidvalidity)
@@ -80,42 +80,42 @@ class Runner:
         pending = [u for u in uids if not self._state.is_imported(uidvalidity, u)]
         if pending:
             log.info(
-                "%d nya meddelanden i %r (%d totalt i mappen)",
+                "%d new message(s) in %r (%d total in the folder)",
                 len(pending), self._cfg.mailbox, len(uids),
             )
 
         for uid in pending:
             if self._stop:
-                log.info("Avbryter köbearbetning före UID %s (nedstängning)", uid)
+                log.info("Stopping queue processing before UID %s (shutting down)", uid)
                 break
             try:
                 try:
                     raw = with_retry(
                         lambda: self._imap.fetch_raw(uid),
-                        what=f"IMAP-hämtning UID {uid}",
+                        what=f"IMAP fetch UID {uid}",
                         retryable=NETWORK_ERRORS,
                         max_attempts=self._cfg.api_max_retries,
                         should_stop=lambda: self._stop,
                     )
                 except RetryError as exc:
-                    # Slut på försök -> bubbla originalfelet så att
-                    # huvudloopen återansluter med backoff.
+                    # Out of attempts -> bubble up the original error so the
+                    # main loop reconnects with backoff.
                     raise (exc.__cause__ or exc)
                 if not raw:
-                    log.warning("UID %s: tomt svar från servern — försöker igen nästa körning", uid)
+                    log.warning("UID %s: empty response from the server — retrying next run", uid)
                     continue
                 self._proc.process(uidvalidity, uid, raw)
             except NETWORK_ERRORS:
-                raise  # bubbla upp -> återanslutning
+                raise  # bubble up -> reconnect
             except Exception:  # noqa: BLE001
                 log.exception(
-                    "UID %s: import misslyckades — UID:t markeras INTE, "
-                    "försök igen nästa körning", uid,
+                    "UID %s: import failed — UID NOT marked as done, "
+                    "will retry next run", uid,
                 )
             finally:
                 self._heartbeat()
 
-    # ---- huvudloop --------------------------------------------
+    # ---- main loop --------------------------------------------
     def run(self) -> None:
         signal.signal(signal.SIGTERM, self._request_stop)
         signal.signal(signal.SIGINT, self._request_stop)
@@ -128,7 +128,7 @@ class Runner:
             try:
                 self._imap.connect()
                 backoff = 5
-                self._run_once()  # backlog direkt vid anslutning
+                self._run_once()  # process the backlog right after connecting
                 last_poll = time.monotonic()
 
                 while not self._stop:
@@ -146,29 +146,29 @@ class Runner:
             except NETWORK_ERRORS as exc:
                 if self._stop:
                     break
-                log.warning("Nätverksfel (%s) — återansluter om %ss", exc, backoff)
+                log.warning("Network error (%s) — reconnecting in %ss", exc, backoff)
                 self._sleep(backoff)
                 backoff = min(backoff * 2, self._cfg.reconnect_backoff_max)
             except Exception:  # noqa: BLE001
                 if self._stop:
                     break
-                log.exception("Oväntat fel i huvudloopen — återansluter om %ss", backoff)
+                log.exception("Unexpected error in the main loop — reconnecting in %ss", backoff)
                 self._sleep(backoff)
                 backoff = min(backoff * 2, self._cfg.reconnect_backoff_max)
             finally:
                 self._imap.logout()
 
         self._state.close()
-        log.info("Avslutad rent")
+        log.info("Shut down cleanly")
 
 
 def run() -> None:
     cfg = Config.from_env()
     setup_logging(cfg.log_level)
     if not cfg.obsidian_api_key:
-        raise SystemExit("OBSIDIAN_API_KEY måste vara satt (hämtas via VNC, se README)")
+        raise SystemExit("OBSIDIAN_API_KEY must be set (get it via the web UI, see README)")
     log.info(
-        "obsidian-epost-import %s startar — mapp=%r, poll=%ss, idle=%ss",
+        "obsidian-epost-import %s starting — folder=%r, poll=%ss, idle=%ss",
         _version(), cfg.mailbox, cfg.poll_interval, cfg.idle_timeout,
     )
     Runner(cfg).run()

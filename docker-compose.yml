@@ -1,113 +1,119 @@
 # ============================================================
-#  obsidian-epost-import — helt fristående compose-projekt
+#  obsidian-epost-import — fully standalone compose project
 # ============================================================
-#  Delar INGET med obsidian-nas-sync:
-#    - eget projektnamn (name: nedan)
-#    - eget bridge-nätverk (epost-import-net)
-#    - egna namngivna volymer (epost-import-*)
-#  Den headless Obsidian-containern ansluter till CouchDB via
-#  den publika URL:en https://obsidian.valfridsson.se (Cloudflare
-#  Tunnel) precis som vilken vanlig klientenhet som helst —
-#  konfigureras EN gång via webb-UI, se README.md.
+#  Shares NOTHING with obsidian-nas-sync:
+#    - its own project name (name: below)
+#    - its own bridge network (epost-import-net)
+#    - its own named volumes (epost-import-*)
+#  The headless Obsidian container connects to CouchDB via the
+#  public URL https://obsidian.valfridsson.se (Cloudflare Tunnel)
+#  just like any regular client device — configured ONCE via the
+#  web UI, see README.md.
 #
-#  ROBUSTHET VID NAS-OMSTART/STRÖMAVBROTT — se README
-#  ("Robusthet & självläkning"):
-#    - restart: unless-stopped på alla tjänster => Docker startar om
-#      dem automatiskt när dockerd kommer upp igen efter ett strömavbrott.
-#    - depends_on/condition styr bara ordningen vid `docker compose up`,
-#      INTE dockerds egen omstart-vid-boot — det spelar ingen roll här
-#      eftersom mail-importer redan väntar in Obsidian med egen
-#      retry/backoff oavsett startordning.
-#    - autoheal (sist i filen) startar om en container som Docker
-#      rapporterar "unhealthy" — täcker fallet att en container hänger
-#      utan att processen kraschar (vanligast för Electron/Obsidian).
+#  ROBUSTNESS ON NAS REBOOT/POWER LOSS — see README
+#  ("Robustness & self-healing"):
+#    - restart: unless-stopped on all services => Docker restarts
+#      them automatically once dockerd comes back up after a
+#      power outage.
+#    - depends_on/condition only governs ordering for
+#      `docker compose up`, NOT dockerd's own restart-on-boot —
+#      that doesn't matter here since mail-importer already waits
+#      for Obsidian with its own retry/backoff regardless of
+#      startup order.
+#    - autoheal (last in this file) restarts a container that
+#      Docker reports as "unhealthy" — covers the case of a
+#      container hanging without the process crashing (most
+#      common for Electron/Obsidian).
 #
-#  PUBLICERADE IMAGES — se README "Kör utan utvecklingsmiljö":
-#    Varje tjänst har både `image:` (publicerad av CI till GHCR,
-#    `docker compose pull` hämtar den) och `build:` (bygg själv från
-#    källkod, `docker compose up -d --build`). `docker compose pull`
-#    kräver inte att du har repots källkod/Dockerfiler lokalt.
+#  PUBLISHED IMAGES — see README "Run without a dev environment":
+#    Every service has both `image:` (published by CI to GHCR,
+#    `docker compose pull` fetches it) and `build:` (build it
+#    yourself from source, `docker compose up -d --build`).
+#    `docker compose pull` doesn't require you to have the repo's
+#    source/Dockerfiles locally.
 # ============================================================
 
 name: obsidian-epost-import
 
 services:
   # ----------------------------------------------------------
-  #  Headless Obsidian (LinuxServer.io + Selkies-desktop)
-  #  Tunt lager: ./obsidian/Dockerfile lägger bara till ett
-  #  init-skript som förinstallerar Local REST API-pluginet.
+  #  Headless Obsidian (LinuxServer.io + Selkies desktop)
+  #  Thin layer: ./obsidian/Dockerfile only adds an init script
+  #  that preinstalls the Local REST API plugin.
   # ----------------------------------------------------------
   obsidian:
-    # Prebuilt image publicerad av CI. `docker compose pull` hämtar/
-    # uppdaterar den. Pinna en version: byt "latest" mot t.ex. "0.1.0".
+    # Prebuilt image published by CI. `docker compose pull` fetches/
+    # updates it. To pin a version, replace "latest" with e.g. "0.1.0".
     image: ghcr.io/dvalfrid/obsidian-epost-import/obsidian:latest
-    # …eller bygg från källkod i stället: `docker compose build obsidian`.
+    # …or build from source instead: `docker compose build obsidian`.
     build:
       context: ./obsidian
       args:
-        # Pinnad LSIO-tagg. Nyare finns på:
+        # Pinned LSIO tag. Newer ones:
         # https://github.com/linuxserver/docker-obsidian/releases
         OBSIDIAN_BASE_TAG: ${OBSIDIAN_BASE_TAG:-v1.13.7-ls144}
     container_name: epost-import-obsidian
     restart: unless-stopped
     labels:
-      # Låter autoheal-tjänsten längre ned starta om den här
-      # containern om Docker rapporterar den som "unhealthy".
+      # Lets the autoheal service further down restart this
+      # container if Docker reports it as "unhealthy".
       - "autoheal=true"
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-Europe/Stockholm}
       TITLE: "Obsidian (epost-import)"
-      # Basic auth för webb-UI:t (används bara vid engångskonfig).
+      # Basic auth for the web UI (only used during one-time setup).
       CUSTOM_USER: ${OBSIDIAN_WEB_USER:-admin}
-      PASSWORD: ${OBSIDIAN_WEB_PASSWORD:?ange OBSIDIAN_WEB_PASSWORD i .env}
-      # Läses av init-skriptet (obsidian/custom-cont-init.d/...).
+      PASSWORD: ${OBSIDIAN_WEB_PASSWORD:?set OBSIDIAN_WEB_PASSWORD in .env}
+      # Read by the init script (obsidian/custom-cont-init.d/...).
       OBSIDIAN_VAULT_NAME: ${OBSIDIAN_VAULT_NAME:-Daniel}
       LOCAL_REST_API_VERSION: ${LOCAL_REST_API_VERSION:-5.1.0}
     volumes:
-      # NAMED VOLUME med flit — INTE bind mount mot en värd-mapp.
-      # Named volumes beter sig identiskt på Windows/Docker Desktop
-      # (WSL2) och på TOS/Linux-NAS:en. Allt Obsidian-tillstånd
-      # (valv, .obsidian-config, plugins, LiveSync-inställningar,
-      # Local REST API-nyckeln) ligger under /config.
+      # NAMED VOLUME on purpose — NOT a bind mount to a host folder.
+      # Named volumes behave identically on Windows/Docker Desktop
+      # (WSL2) and on a TOS/Linux NAS. All Obsidian state (vault,
+      # .obsidian config, plugins, LiveSync settings, the Local
+      # REST API key) lives under /config.
       - epost-import-obsidian-config:/config
     networks:
       - epost-import-net
 
     # --------------------------------------------------------
-    #  WEBB-UI — ENDAST FÖR ENGÅNGSKONFIGURATION
+    #  WEB UI — ONE-TIME SETUP ONLY
     # --------------------------------------------------------
-    #  Avkommentera raden nedan, kör `docker compose up -d obsidian`,
-    #  öppna https://127.0.0.1:3001 (självsignerat cert), konfigurera
-    #  LiveSync + hämta Local REST API-nyckeln (se README.md),
-    #  KOMMENTERA sedan raden igen och kör `docker compose up -d`.
-    #  Bindningen till 127.0.0.1 gör att porten aldrig når nätet
-    #  utanför NAS:en.
+    #  Uncomment the line below, run `docker compose up -d obsidian`,
+    #  open https://127.0.0.1:3001 (self-signed cert), configure
+    #  LiveSync + get the Local REST API key (see README.md), then
+    #  COMMENT the line out again and run `docker compose up -d`.
+    #  Binding to 127.0.0.1 means the port never reaches the
+    #  network outside the NAS.
     ports:
       - "127.0.0.1:3001:3001"
     # --------------------------------------------------------
 
-    # Local REST API (27124/https, självsignerat) exponeras MEDVETET
-    # inte mot host-nätverket — bara mail-importer når den internt
-    # på https://obsidian:27124.
+    # The Local REST API (27124/https, self-signed) is DELIBERATELY
+    # not exposed to the host network — only mail-importer reaches
+    # it internally at https://obsidian:27124.
     expose:
       - "27124"
 
-    # Krävs av Electron/Chromium i Selkies-imagen.
+    # Required by Electron/Chromium in the Selkies image.
     shm_size: "1gb"
 
-    # Resursgränser så en bugg aldrig kan svälta NAS:en.
+    # Resource limits so a bug can never starve the NAS.
     mem_limit: ${OBSIDIAN_MEM_LIMIT:-1g}
     cpus: ${OBSIDIAN_CPUS:-1.0}
 
-    # Local REST API svarar på 27124 så snart valvet är öppet.
-    # Vid ALLRA första starten blir den "unhealthy" tills du gjort
-    # engångskonfigen i webb-UI:t — det är meningen (mail-importer
-    # ska inte börja förrän LiveSync + nyckel finns). mail-importer
-    # väntar dessutom själv in API:t med retry/backoff.
-    # start_period är satt generöst (NAS-reboot => många containrar
-    # drar disk-I/O samtidigt => Electron kan ta sin tid att boota).
+    # The Local REST API responds on 27124 as soon as the vault is
+    # open. On the VERY first start it will be "unhealthy" until
+    # you've done the one-time setup in the web UI — that's
+    # intentional (mail-importer shouldn't start until LiveSync +
+    # the key exist). mail-importer also waits for the API itself
+    # with retry/backoff.
+    # start_period is set generously (a NAS reboot means many
+    # containers competing for disk I/O at once => Electron can
+    # take a while to boot).
     healthcheck:
       test: ["CMD-SHELL", "curl -ksf https://localhost:27124/ >/dev/null 2>&1 || exit 1"]
       interval: 30s
@@ -116,56 +122,55 @@ services:
       start_period: 180s
 
   # ----------------------------------------------------------
-  #  Proton Mail Bridge — headless, körs helt i Docker så att
-  #  hela stacken (även på NAS:en) är oberoende av en alltid-
-  #  påslagen Windows/Mac-dator.
+  #  Proton Mail Bridge — headless, runs entirely in Docker so
+  #  the whole stack (including on the NAS) is independent of
+  #  any always-on Windows/Mac computer.
   #
-  #  EGEN image (./bridge/Dockerfile), inte en färdig från Docker
-  #  Hub: de undersökta community-imagerna (t.ex. shenxn/protonmail-
-  #  bridge) hade slutat publiceras ~17 månader tillbaka trots att
-  #  källkoden fortsatte uppdateras — dvs. deras byggpipeline hade
-  #  gått sönder tyst. Vår egen image hämtar Protons OFFICIELLA
-  #  .deb direkt och verifierar OpenPGP-signaturen mot Protons
-  #  pinnade nyckel innan installation. Se bridge/Dockerfile och
-  #  CLAUDE.md för detaljer.
+  #  OWN image (./bridge/Dockerfile), not a prebuilt one from
+  #  Docker Hub: the community images we evaluated (e.g.
+  #  shenxn/protonmail-bridge) had stopped publishing despite
+  #  upstream still shipping releases — their build pipeline had
+  #  silently broken. Our own image downloads Proton's OFFICIAL
+  #  .deb directly and verifies the OpenPGP signature against
+  #  Proton's pinned key before installing. See bridge/Dockerfile
+  #  and CLAUDE.md for details.
   #
-  #  ENGÅNGSKONFIGURATION (interaktiv, måste köras av dig i en
-  #  riktig terminal — se README "Steg 3"):
+  #  ONE-TIME SETUP (interactive, must be run by you in a real
+  #  terminal — see README "Step 3"):
   #    docker compose run --rm -it bridge init
-  #  -> login -> följ prompten (lösenord + ev. 2FA) -> info
-  #  (visar Bridge-lösenordet du ska lägga i .env som IMAP_PASS)
-  #  -> exit. Sessionen sparas i named volume och överlever
-  #  omstart — ingen ny inloggning behövs efter det.
+  #  -> login -> follow the prompt (password + 2FA if enabled) -> info
+  #  (shows the Bridge password to put in .env as IMAP_PASS)
+  #  -> exit. The session is saved in a named volume and survives
+  #  restarts — no new login needed after that.
   # ----------------------------------------------------------
   bridge:
-    # Prebuilt image publicerad av CI (GPLv3 — Proton Bridges källkod:
+    # Prebuilt image published by CI (GPLv3 — Proton Bridge's source:
     # https://github.com/ProtonMail/proton-bridge). `docker compose pull`
-    # hämtar/uppdaterar den. Pinna en version: byt "latest" mot t.ex. "0.1.0".
+    # fetches/updates it. To pin a version, replace "latest" with e.g. "0.1.0".
     image: ghcr.io/dvalfrid/obsidian-epost-import/bridge:latest
-    # …eller bygg från källkod i stället: `docker compose build bridge`.
+    # …or build from source instead: `docker compose build bridge`.
     build:
       context: ./bridge
       args:
-        # Pinnad version. Nyare finns på:
+        # Pinned version. Newer ones:
         # https://github.com/ProtonMail/proton-bridge/releases
         BRIDGE_VERSION: ${BRIDGE_VERSION:-3.26.0-1}
     container_name: epost-import-bridge
     restart: unless-stopped
     labels:
-      # Låter autoheal-tjänsten starta om containern om Bridge (eller
-      # socat-forwardningen) hänger sig utan att processen kraschar.
+      # Lets the autoheal service restart the container if Bridge
+      # (or the socat forwarding) hangs without the process crashing.
       - "autoheal=true"
     volumes:
-      # Bridges konto/session + GPG-nyckel/pass-lösenordslager.
-      # Förlorar du den måste du köra `init`-inloggningen igen
-      # (ingen data går förlorad i själva mejlkontot, bara den
-      # lokala sessionen).
+      # Bridge's account/session + GPG key/pass secret store. If
+      # you lose it you'll need to redo the `init` login (no data
+      # is lost in the mail account itself, just the local session).
       - epost-import-bridge-config:/root
     networks:
       - epost-import-net
-    # IMAP (143) och SMTP (25, oanvänd här) — socats forward-portar
-    # (se bridge/entrypoint.sh), bara internt i epost-import-net,
-    # aldrig publicerat mot host-nätverket.
+    # IMAP (143) and SMTP (25, unused here) — socat's forward ports
+    # (see bridge/entrypoint.sh), internal to epost-import-net only,
+    # never published to the host network.
     expose:
       - "143"
       - "25"
@@ -173,83 +178,86 @@ services:
     cpus: ${BRIDGE_CPUS:-0.5}
 
   # ----------------------------------------------------------
-  #  Mail-importer — IMAP (Proton Bridge) -> Local REST API
+  #  Mail importer — IMAP (Proton Bridge) -> Local REST API
   # ----------------------------------------------------------
   mail-importer:
-    # Prebuilt image publicerad av CI. `docker compose pull` hämtar/
-    # uppdaterar den. Pinna en version: byt "latest" mot t.ex. "0.1.0".
+    # Prebuilt image published by CI. `docker compose pull` fetches/
+    # updates it. To pin a version, replace "latest" with e.g. "0.1.0".
     image: ghcr.io/dvalfrid/obsidian-epost-import/mail-importer:latest
-    # …eller bygg från källkod i stället: `docker compose build mail-importer`.
+    # …or build from source instead: `docker compose build mail-importer`.
     build:
       context: ./mail-importer
       dockerfile: Dockerfile
     container_name: epost-import-importer
     restart: unless-stopped
     labels:
-      # Låter autoheal-tjänsten starta om containern om huvudloopen
-      # skulle hänga sig (heartbeat-filen slutar uppdateras).
+      # Lets the autoheal service restart the container if the main
+      # loop hangs (the heartbeat file stops updating).
       - "autoheal=true"
     env_file:
       - .env
     environment:
-      # Fast internt — pratar ALDRIG med Obsidian via extern IP.
-      # 27124 är Local REST API-pluginets HTTPS-port (självsignerat
-      # cert). Vill du hellre köra oskyddad HTTP: aktivera pluginets
-      # HTTP-server och sätt http://obsidian:27123 här.
+      # Fixed, internal — NEVER talks to Obsidian via an external IP.
+      # 27124 is the Local REST API plugin's HTTPS port (self-signed
+      # cert). To use unencrypted HTTP instead: enable the plugin's
+      # HTTP server and set http://obsidian:27123 here.
       OBSIDIAN_API_URL: ${OBSIDIAN_API_URL:-https://obsidian:27124}
       OBSIDIAN_API_VERIFY_TLS: ${OBSIDIAN_API_VERIFY_TLS:-false}
       STATE_DB_PATH: /data/state.sqlite3
       HEARTBEAT_PATH: /data/heartbeat
-      # Docker HEALTHCHECK (i mail-importer/Dockerfile) rapporterar
-      # "unhealthy" om heartbeaten är äldre än detta.
+      # Docker HEALTHCHECK (in mail-importer/Dockerfile) reports
+      # "unhealthy" if the heartbeat is older than this.
       HEARTBEAT_MAX_AGE_SECONDS: ${HEARTBEAT_MAX_AGE_SECONDS:-900}
       TZ: ${TZ:-Europe/Stockholm}
     volumes:
-      # NAMED VOLUME med flit — INTE bind mount. SQLite gör frekventa
-      # små writes/locks och beter sig illa på en Windows-bind-mount
-      # via WSL2. Named volume = samma beteende på Windows nu och på
-      # NAS:en sen. Ligger INTE i Obsidian-valvet.
+      # NAMED VOLUME on purpose — NOT a bind mount. SQLite does
+      # frequent small writes/locks and behaves badly on a Windows
+      # bind mount via WSL2. Named volume = same behavior on
+      # Windows now and on the NAS later. NOT inside the Obsidian
+      # vault.
       - epost-import-importer-state:/data
     networks:
       - epost-import-net
     depends_on:
       obsidian:
-        # Skulle healthchecken strula på första setupen: byt till
-        # `service_started` (importern väntar ändå in API:t själv).
+        # If the healthcheck ever gets in the way during initial
+        # setup: switch to `service_started` (the importer still
+        # waits for the API itself).
         condition: service_healthy
-      # bridge har ingen HEALTHCHECK i basimagen — importern väntar
-      # ändå in IMAP med egen retry/backoff (imap_source.py).
+      # bridge has no HEALTHCHECK in the base image — the importer
+      # waits for IMAP with its own retry/backoff anyway (imap_source.py).
       bridge:
         condition: service_started
-    # Låt en påbörjad import bli klar vid `docker compose stop`.
+    # Let an in-progress import finish on `docker compose stop`.
     stop_grace_period: 90s
-    # Bara relevant om du kör Bridge nativt på Docker-hosten i
-    # stället för i bridge-containern ovan (satt IMAP_HOST till
-    # host.docker.internal i .env då). Ofarligt att ha kvar annars.
+    # Only relevant if you run Bridge natively on the Docker host
+    # instead of in the bridge container above (then set IMAP_HOST
+    # to host.docker.internal in .env). Harmless to leave otherwise.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     mem_limit: ${IMPORTER_MEM_LIMIT:-512m}
     cpus: ${IMPORTER_CPUS:-0.75}
 
   # ----------------------------------------------------------
-  #  Autoheal — startar om "autoheal=true"-märkta containrar som
-  #  Docker rapporterar unhealthy, dvs. hängda men inte kraschade.
-  #  restart: unless-stopped täcker bara faktiska process-exits;
-  #  det här täcker resten.
+  #  Autoheal — restarts containers labeled "autoheal=true" that
+  #  Docker reports as unhealthy, i.e. hung but not crashed.
+  #  restart: unless-stopped only covers actual process exits;
+  #  this covers the rest.
   #
-  #  OBS — SÄKERHETSAVVÄGNING: kräver att /var/run/docker.sock
-  #  monteras in. Den socketen är i praktiken likvärdig med
-  #  root-åtkomst till HELA Docker-hosten (kan starta/stoppa/skapa
-  #  vilken container som helst, inte bara de två i det här
-  #  projektet). Vägs medvetet mot självläkningen. Vill du hellre
-  #  slippa den exponeringen: ta bort den här tjänsten + `labels:`-
-  #  raderna ovan och lita på restart:unless-stopped + att du själv
-  #  då och då kollar `docker compose ps` (visar "unhealthy").
+  #  NOTE — SECURITY TRADE-OFF: requires mounting
+  #  /var/run/docker.sock. That socket is, in practice, equivalent
+  #  to root access to the ENTIRE Docker host (can start/stop/
+  #  create any container, not just the ones in this project).
+  #  Weighed deliberately against the self-healing benefit. If
+  #  you'd rather avoid that exposure: remove this service + the
+  #  `labels:` lines above and rely on restart:unless-stopped +
+  #  checking `docker compose ps` yourself now and then (shows
+  #  "unhealthy").
   #
-  #  Samma /var/run/docker.sock-sökväg fungerar oförändrat på både
-  #  Docker Desktop (Windows/Mac) och Linux/TOS — det är alltså
-  #  INTE ett brott mot portabilitetsprincipen (ingen NAS- eller
-  #  Windows-specifik sökväg), bara en medveten privilegie-avvägning.
+  #  The /var/run/docker.sock path works unchanged on both Docker
+  #  Desktop (Windows/Mac) and Linux/TOS — so this is NOT a breach
+  #  of the portability principle (no NAS- or Windows-specific
+  #  path), just a deliberate privilege trade-off.
   # ----------------------------------------------------------
   autoheal:
     image: willfarrell/autoheal:latest
@@ -258,16 +266,16 @@ services:
     environment:
       AUTOHEAL_CONTAINER_LABEL: autoheal
       AUTOHEAL_INTERVAL: 30
-      # Extra marginal utöver containrarnas egna healthcheck-
-      # start_period, för att undvika omstarts-loopar på en
-      # nyss omstartad, hårt belastad NAS.
+      # Extra margin on top of the containers' own healthcheck
+      # start_period, to avoid restart loops on a freshly rebooted,
+      # heavily loaded NAS.
       AUTOHEAL_START_PERIOD: 120
       AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
       TZ: ${TZ:-Europe/Stockholm}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    # Behöver inget eget nätverk (pratar bara med docker.sock) — satt
-    # ändå så vi slipper att Compose skapar ett extra "default"-nät.
+    # Doesn't need its own network (only talks to docker.sock) —
+    # set anyway so Compose doesn't create an extra "default" network.
     networks:
       - epost-import-net
     mem_limit: 64m
@@ -278,9 +286,9 @@ networks:
     name: epost-import-net
     driver: bridge
 
-# Docker-hanterade named volumes. Faktiska namn blir prefixade med
-# projektnamnet, t.ex. obsidian-epost-import_epost-import-obsidian-config.
-# Se README ("Portabilitet") för hur man flyttar dem mellan maskiner.
+# Docker-managed named volumes. Actual names get prefixed with the
+# project name, e.g. obsidian-epost-import_epost-import-obsidian-config.
+# See README ("Portability") for how to move them between machines.
 volumes:
   epost-import-obsidian-config:
   epost-import-importer-state:

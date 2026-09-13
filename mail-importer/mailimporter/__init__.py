@@ -1,5 +1,7 @@
-"""obsidian-epost-import — hämtar epost från en Proton Mail-label via
-Proton Bridge (IMAP) och skapar anteckningar + bilagor i ett Obsidian-valv
-genom Local REST API-pluginet i en headless Obsidian-container."""
+"""obsidian-epost-import — fetches email from a Proton Mail label via
+Proton Bridge (IMAP) and creates notes + attachments in an Obsidian vault
+through the Local REST API plugin in a headless Obsidian container."""
 
-__version__ = "1.0.0"
+# Informational only (shown in the startup log line) — the release-please
+# tag/CHANGELOG.md is the source of truth for the actual project version.
+__version__ = "0.1.0"

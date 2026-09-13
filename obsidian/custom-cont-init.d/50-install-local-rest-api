@@ -1,15 +1,16 @@
 #!/usr/bin/with-contenv bash
 # ------------------------------------------------------------------
-#  Förinstallerar / uppdaterar obsidian-local-rest-api-pluginet i
-#  valvet så att mail-importer kan nå Local REST API på 27124.
+#  Preinstalls / updates the obsidian-local-rest-api plugin in the
+#  vault so mail-importer can reach the Local REST API on 27124.
 #
-#  - Idempotent: körs vid varje containerstart, gör inget om rätt
-#    version redan ligger på plats.
-#  - Fäller ALDRIG containern: kan pluginet inte hämtas (t.ex. ingen
-#    internet vid start) loggas en varning och du får installera det
-#    manuellt via webb-UI:t i stället.
-#  - Restricted mode / "Community plugins: On" måste du bekräfta EN
-#    gång i GUI:t (görs ändå i samma veva som LiveSync-inloggningen).
+#  - Idempotent: runs on every container start, does nothing if the
+#    right version is already in place.
+#  - NEVER fails the container: if the plugin can't be downloaded
+#    (e.g. no internet at startup), a warning is logged and you'll
+#    need to install it manually via the web UI instead.
+#  - You still need to confirm Restricted mode / "Community plugins:
+#    On" ONCE in the GUI (done at the same time as the LiveSync login
+#    anyway).
 # ------------------------------------------------------------------
 
 PLUGIN_ID="obsidian-local-rest-api"
@@ -23,28 +24,28 @@ BASE_URL="https://github.com/coddingtonbear/${PLUGIN_ID}/releases/download/${PLU
 
 log() { echo "[custom-init] local-rest-api: $*"; }
 
-# --- Redan rätt version? -----------------------------------------
+# --- Already the right version? -----------------------------------
 if [ -f "${PLUGIN_DIR}/manifest.json" ] && \
    grep -q "\"version\"[[:space:]]*:[[:space:]]*\"${PLUGIN_VERSION}\"" "${PLUGIN_DIR}/manifest.json"; then
-    log "v${PLUGIN_VERSION} finns redan i valvet '${VAULT_NAME}' — hoppar över"
+    log "v${PLUGIN_VERSION} already present in vault '${VAULT_NAME}' — skipping"
     exit 0
 fi
 
-log "installerar v${PLUGIN_VERSION} i valvet '${VAULT_NAME}'"
+log "installing v${PLUGIN_VERSION} into vault '${VAULT_NAME}'"
 mkdir -p "${PLUGIN_DIR}"
 
-# --- Hämta plugin-filerna --------------------------------------
+# --- Fetch the plugin files --------------------------------------
 required_ok=1
 for f in manifest.json main.js styles.css; do
     if curl -fsSL --retry 3 --connect-timeout 10 -o "${PLUGIN_DIR}/${f}.tmp" "${BASE_URL}/${f}"; then
         mv "${PLUGIN_DIR}/${f}.tmp" "${PLUGIN_DIR}/${f}"
-        log "hämtade ${f}"
+        log "fetched ${f}"
     else
         rm -f "${PLUGIN_DIR}/${f}.tmp"
         if [ "${f}" = "styles.css" ]; then
-            log "ingen styles.css i releasen (ok)"
+            log "no styles.css in this release (fine)"
         else
-            log "VARNING: kunde inte hämta ${f} — installera pluginet manuellt via GUI"
+            log "WARNING: could not fetch ${f} — install the plugin manually via the GUI"
             required_ok=0
         fi
     fi
@@ -54,27 +55,29 @@ if [ "${required_ok}" != "1" ]; then
     exit 0
 fi
 
-# --- Aktivera pluginet -----------------------------------------
+# --- Enable the plugin -------------------------------------------
 CP_FILE="${OBS_DIR}/community-plugins.json"
 if [ ! -f "${CP_FILE}" ]; then
     printf '["%s"]\n' "${PLUGIN_ID}" > "${CP_FILE}"
-    log "skapade community-plugins.json"
+    log "created community-plugins.json"
 elif ! grep -q "\"${PLUGIN_ID}\"" "${CP_FILE}"; then
-    # Lägg id:t först i JSON-arrayen och städa ev. "[ ,\n" / ", ]".
+    # Insert the id first in the JSON array and clean up any
+    # "[ ,\n" / ", ]" left over.
     sed -i "s/^\[[[:space:]]*/[\"${PLUGIN_ID}\", /" "${CP_FILE}"
     sed -i "s/,[[:space:]]*\]/]/" "${CP_FILE}"
-    log "lade till ${PLUGIN_ID} i community-plugins.json"
+    log "added ${PLUGIN_ID} to community-plugins.json"
 fi
 
-# --- Rätt ägare så Obsidian (kör som 'abc') kan läsa/skriva ---
-# VAULT_DIR kan ha skapats av mkdir -p ovan som root vid allra
-# första körningen (om valvet inte fanns än) — utan att chowna
-# valvroten själv, bara .obsidian, kan Obsidian inte öppna den
-# ("no permission to access folder"). Chownas inte rekursivt här:
-# billigt, och LiveSync/Obsidian äger sedan själva allt de skapar.
-# OBS_DIR chownas rekursivt (bara vår plugin-katalog, litet innehåll
-# — och tidiga idempotens-checken ovan gör att det inte sker vid
-# varje boot när pluginet redan ligger på plats).
+# --- Fix ownership so Obsidian (runs as 'abc') can read/write -----
+# VAULT_DIR may have been created by the mkdir -p above as root on
+# the very first run (if the vault didn't exist yet) — without
+# chowning the vault root itself, only .obsidian, Obsidian can't
+# open it ("no permission to access folder"). Not chowned
+# recursively here: cheap, and LiveSync/Obsidian own everything
+# they create themselves afterward. OBS_DIR is chowned recursively
+# (just our plugin directory, small contents — and the early
+# idempotency check above means this doesn't run on every boot once
+# the plugin is already in place).
 if command -v lsiown >/dev/null 2>&1; then
     lsiown abc:abc "${VAULT_DIR}"
     lsiown -R abc:abc "${OBS_DIR}"
@@ -83,5 +86,5 @@ else
     chown -R "${PUID:-1000}:${PGID:-1000}" "${OBS_DIR}" 2>/dev/null || true
 fi
 
-log "klart — bekräfta 'Community plugins: On' i GUI:t vid engångskonfigen"
+log "done — confirm 'Community plugins: On' in the GUI during one-time setup"
 exit 0

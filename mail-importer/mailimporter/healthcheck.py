@@ -11,12 +11,12 @@ def main() -> int:
     try:
         age = time.time() - os.path.getmtime(path)
     except OSError:
-        print("ingen heartbeat-fil ännu", file=sys.stderr)
+        print("no heartbeat file yet", file=sys.stderr)
         return 1
     if age > max_age:
-        print(f"heartbeat för gammal: {age:.0f}s > {max_age}s", file=sys.stderr)
+        print(f"heartbeat too old: {age:.0f}s > {max_age}s", file=sys.stderr)
         return 1
-    print(f"ok (heartbeat {age:.0f}s gammal)")
+    print(f"ok (heartbeat {age:.0f}s old)")
     return 0
 
 

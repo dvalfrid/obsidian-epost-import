@@ -20,14 +20,14 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
-          # Använd ett PAT (secret RELEASE_PLEASE_TOKEN) om det finns så att
-          # release-PR:n skapas av en riktig användare och CI körs på den
-          # automatiskt. Faller annars tillbaka på GITHUB_TOKEN, vars PR:ar
-          # kräver manuellt "Approve and run".
+          # Use a PAT (secret RELEASE_PLEASE_TOKEN) if present so the release
+          # PR is authored by a real user and CI runs on it automatically.
+          # Otherwise falls back to GITHUB_TOKEN, whose PRs require a manual
+          # "Approve and run".
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-    # När en release-tagg klipps (vX.Y.Z) plockar `images`-jobbet i ci.yml
-    # upp den via sin `tags: ["v*"]`-trigger och publicerar versionerade
-    # images för obsidian, bridge och mail-importer.
+    # When a release tag is cut (vX.Y.Z), the `images` job in ci.yml picks
+    # it up via its `tags: ["v*"]` trigger and publishes versioned images
+    # for obsidian, bridge, and mail-importer.

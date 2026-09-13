@@ -11,7 +11,7 @@ from .config import Config
 
 log = logging.getLogger("imap")
 
-# Undantag som ska trigga full återanslutning (med backoff).
+# Exceptions that should trigger a full reconnect (with backoff).
 NETWORK_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     socket.error,
@@ -22,11 +22,12 @@ NETWORK_ERRORS: tuple[type[BaseException], ...] = (
 
 
 class ImapSource:
-    """IMAP-läsning mot Proton Bridge.
+    """IMAP reading against Proton Bridge.
 
-    - Mappen väljs alltid read-only (EXAMINE) och meddelanden hämtas med
-      BODY.PEEK[] så att \\Seen-flaggan på servern aldrig rörs.
-    - Alla meddelanden hämtas oavsett läs-status.
+    - The folder is always selected read-only (EXAMINE) and messages are
+      fetched with BODY.PEEK[] so the \\Seen flag on the server is never
+      touched.
+    - All messages are fetched regardless of read status.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -35,7 +36,7 @@ class ImapSource:
         self._idling = False
         self._label_folders_cache: list[str] | None = None
 
-    # ---- anslutning ------------------------------------------------
+    # ---- connection --------------------------------------------------
     def connect(self) -> None:
         self.logout()
         self._label_folders_cache = None
@@ -56,7 +57,7 @@ class ImapSource:
         client.login(self._cfg.imap_user, self._cfg.imap_pass)
         self._client = client
         log.info(
-            "Ansluten till IMAP %s:%s som %s",
+            "Connected to IMAP %s:%s as %s",
             self._cfg.imap_host, self._cfg.imap_port, self._cfg.imap_user,
         )
 
@@ -67,28 +68,28 @@ class ImapSource:
             if self._idling:
                 self._client.idle_done()
             self._client.logout()
-        except Exception:  # noqa: BLE001 - städning ska aldrig fälla
+        except Exception:  # noqa: BLE001 - cleanup should never fail
             pass
         finally:
             self._client = None
             self._idling = False
 
-    # ---- kommandon ------------------------------------------------
+    # ---- commands ------------------------------------------------
     def _require(self) -> IMAPClient:
         if self._client is None:
-            raise IMAPClientError("Inte ansluten till IMAP")
+            raise IMAPClientError("Not connected to IMAP")
         return self._client
 
     def list_folders(self) -> list[str]:
         return [entry[2] for entry in self._require().list_folders()]
 
     def select(self) -> int:
-        """Väljer den bevakade mappen read-only och returnerar UIDVALIDITY."""
+        """Selects the watched folder read-only and returns UIDVALIDITY."""
         resp = self._require().select_folder(self._cfg.mailbox, readonly=True)
         return int(resp[b"UIDVALIDITY"])
 
     def all_uids(self) -> list[int]:
-        """Alla UID:n i mappen, oavsett läs-status."""
+        """All UIDs in the folder, regardless of read status."""
         return sorted(self._require().search(["ALL"]))
 
     def fetch_raw(self, uid: int) -> bytes | None:
@@ -99,8 +100,8 @@ class ImapSource:
         return data.get(b"BODY[]") or data.get(b"RFC822")
 
     def _label_folders(self) -> list[str]:
-        """Proton-labels dyker upp i Bridge som egna mappar under
-        'Labels/'. Cachas per anslutning — listas bara en gång."""
+        """Proton labels show up in Bridge as their own folders under
+        'Labels/'. Cached per connection — only listed once."""
         if self._label_folders_cache is None:
             self._label_folders_cache = [
                 f for f in self.list_folders() if f.startswith("Labels/")
@@ -108,16 +109,16 @@ class ImapSource:
         return self._label_folders_cache
 
     def discover_labels(self, message_id: str) -> list[str]:
-        """Ett meddelande kan ha flera Proton-labels samtidigt, men IMAP
-        visar bara vilken mapp vi råkar ha vald. Sök igenom alla
-        Labels/*-mappar efter samma Message-ID för att hitta ALLA labels
-        meddelandet har. Returnerar kort labelnamn (utan 'Labels/'-
-        prefix). VÄXLAR vilken mapp som är vald på anslutningen — anroparen
-        måste själv välja tillbaka den bevakade mappen efteråt.
+        """A message can have several Proton labels at once, but IMAP only
+        shows which folder we happen to have selected. Search through all
+        Labels/* folders for the same Message-ID to find ALL labels the
+        message has. Returns short label names (without the 'Labels/'
+        prefix). SWITCHES which folder is selected on the connection — the
+        caller must reselect the watched folder afterward.
 
-        En trasig anslutning (NETWORK_ERRORS) bubblar vidare direkt så att
-        huvudloopen återansluter. Övriga fel för en enskild mapp loggas
-        och hoppas över, sökningen fortsätter med resten."""
+        A broken connection (NETWORK_ERRORS) bubbles straight up so the main
+        loop reconnects. Other errors for a single folder are logged and
+        skipped, and the search continues with the rest."""
         client = self._require()
         found: list[str] = []
         needle = f"<{message_id}>"
@@ -127,16 +128,16 @@ class ImapSource:
                 uids = client.search(["HEADER", "Message-ID", needle])
             except NETWORK_ERRORS:
                 raise
-            except Exception:  # noqa: BLE001 - en trasig mapp ska inte fälla resten
-                log.warning("kunde inte söka Message-ID i %r", folder, exc_info=True)
+            except Exception:  # noqa: BLE001 - one broken folder shouldn't fail the rest
+                log.warning("could not search for Message-ID in %r", folder, exc_info=True)
                 continue
             if uids:
                 found.append(folder.split("/", 1)[1])
         return found
 
     def idle_wait(self, timeout: int) -> bool:
-        """Blockerar i IMAP IDLE upp till ``timeout`` sekunder. Returnerar
-        True om servern signalerade aktivitet i mappen."""
+        """Blocks in IMAP IDLE for up to ``timeout`` seconds. Returns True if
+        the server signaled activity in the folder."""
         client = self._require()
         client.idle()
         self._idling = True

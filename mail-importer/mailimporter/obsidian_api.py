@@ -22,14 +22,14 @@ class ObsidianError(RuntimeError):
 
 
 class _Transient(Exception):
-    """5xx från API:t — värt att försöka igen."""
+    """5xx from the API — worth retrying."""
 
 
 class ObsidianClient:
-    """Tunn klient mot Local REST API-pluginet.
+    """Thin client for the Local REST API plugin.
 
-    Skapar ENDAST nya filer: varje skrivning föregås av en existenskontroll
-    och befintliga filer rörs aldrig.
+    Only ever CREATES new files: every write is preceded by an existence
+    check, and existing files are never touched.
     """
 
     def __init__(
@@ -50,7 +50,7 @@ class ObsidianClient:
         if not verify_tls:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    # ---- internt ----------------------------------------------------
+    # ---- internal -----------------------------------------------------
     def _vault_url(self, vault_path: str) -> str:
         safe = "/".join(quote(seg) for seg in vault_path.split("/"))
         return f"{self._base}/vault/{safe}"
@@ -70,7 +70,7 @@ class ObsidianClient:
             should_stop=self._should_stop,
         )
 
-    # ---- publikt --------------------------------------------------
+    # ---- public ---------------------------------------------------
     def ping(self) -> bool:
         try:
             resp = self._s.get(
@@ -87,17 +87,17 @@ class ObsidianClient:
         if resp.status_code == 404:
             return False
         raise ObsidianError(
-            f"Oväntad status {resp.status_code} vid kontroll av "
+            f"Unexpected status {resp.status_code} while checking "
             f"{vault_path!r}: {resp.text[:200]}"
         )
 
     def create_file(
         self, vault_path: str, content: bytes, content_type: str
     ) -> bool:
-        """Skapar filen om den saknas. Returnerar True om den skapades,
-        False om den redan fanns. Skriver ALDRIG över en befintlig fil."""
+        """Creates the file if it's missing. Returns True if it was created,
+        False if it already existed. NEVER overwrites an existing file."""
         if self.exists(vault_path):
-            log.info("Hoppar över — filen finns redan: %s", vault_path)
+            log.info("Skipping — file already exists: %s", vault_path)
             return False
 
         resp = self._request(
@@ -109,7 +109,7 @@ class ObsidianClient:
         )
         if resp.status_code not in (200, 201, 204):
             raise ObsidianError(
-                f"PUT {vault_path!r} gav status {resp.status_code}: "
+                f"PUT {vault_path!r} returned status {resp.status_code}: "
                 f"{resp.text[:200]}"
             )
         return True

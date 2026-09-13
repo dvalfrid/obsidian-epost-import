@@ -29,10 +29,10 @@ def _now() -> str:
 
 
 class State:
-    """Krascha-säker tracking i en egen SQLite-fil (inte i valvet).
+    """Crash-safe tracking in its own SQLite file (not in the vault).
 
-    (uidvalidity, uid) är primärnyckeln. message_id indexeras separat så att
-    deduplicering kan falla tillbaka på Message-ID när UIDVALIDITY ändras.
+    (uidvalidity, uid) is the primary key. message_id is indexed separately
+    so deduplication can fall back to Message-ID when UIDVALIDITY changes.
     """
 
     def __init__(self, path: str) -> None:
@@ -48,7 +48,7 @@ class State:
         with self._lock:
             self._conn.close()
 
-    # ---- läsning -------------------------------------------------------
+    # ---- reads ---------------------------------------------------------
     def is_imported(self, uidvalidity: int, uid: int) -> bool:
         with self._lock:
             row = self._conn.execute(
@@ -76,13 +76,13 @@ class State:
             ).fetchone()
         return int(row[0]) if row else None
 
-    # ---- skrivning ---------------------------------------------------
+    # ---- writes --------------------------------------------------------
     def mark_imported(
         self, uidvalidity: int, uid: int, message_id: str, note_path: str
     ) -> None:
-        """Atomisk commit — detta ÄR 'klart'-markeringen. Vid krasch innan
-        detta anrop importeras UID:t om nästa körning (anteckningen skapas
-        bara om den saknas, så ingen dubblett)."""
+        """Atomic commit — this IS the "done" marker. On a crash before this
+        call, the UID gets imported again next run (the note is only created
+        if it's missing, so no duplicate)."""
         with self._lock, self._conn:
             self._conn.execute(
                 "INSERT OR IGNORE INTO imported "

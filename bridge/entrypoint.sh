@@ -1,23 +1,23 @@
 #!/bin/sh
 # ------------------------------------------------------------------
-#  Entrypoint för den egna Proton Bridge-imagen. Två lägen:
+#  Entrypoint for the own Proton Bridge image. Two modes:
 #
-#    init      Interaktivt: skapar (om saknas) GPG-nyckel + pass-
-#              lösenordslager, kör sedan Bridge-CLI:t så du kan
-#              logga in. Körs EN gång (README "Steg 3"):
+#    init      Interactive: creates (if missing) a GPG key + pass
+#              secret store, then runs the Bridge CLI so you can log
+#              in. Run ONCE (README "Step 3"):
 #                docker compose run --rm -it bridge init
-#              I CLI:t: login -> info (Bridge-lösenordet, till
-#              .env som IMAP_PASS) -> exit.
+#              In the CLI: login -> info (the Bridge password, put
+#              it in .env as IMAP_PASS) -> exit.
 #
-#    (inget)   Daemon-läge (default CMD). Kräver att `init` redan
-#              körts (fäller annars med tydligt felmeddelande i
-#              stället för att som originalreferensen tyst köra
-#              vidare med okrypterat lösenordslager).
+#    (none)    Daemon mode (default CMD). Requires that `init` has
+#              already been run (fails with a clear error message
+#              otherwise, instead of silently continuing with an
+#              unencrypted secret store like the reference images did).
 #
-#  Bridge binder sina IMAP/SMTP-portar bara till 127.0.0.1 (hård-
-#  kodat, av Protons design) — socat proxar samma portnummer ut på
-#  containerns interface så att andra containrar på docker-nätverket
-#  (t.ex. mail-importer) når dem.
+#  Bridge only binds its IMAP/SMTP ports to 127.0.0.1 (hardcoded, by
+#  Proton's design) — socat proxies the same port numbers out on the
+#  container's interface so other containers on the Docker network
+#  (e.g. mail-importer) can reach them.
 # ------------------------------------------------------------------
 set -eu
 
@@ -34,23 +34,24 @@ has_keychain() {
 
 ensure_keychain() {
     if ! gpg --list-secret-keys "$KEY_NAME" >/dev/null 2>&1; then
-        log "genererar GPG-nyckel för lösenordslagret (engångsjobb, sparas i volymen)"
+        log "generating a GPG key for the secret store (one-time job, saved in the volume)"
         gpg --batch --generate-key /gpg-batch-params
     fi
     if [ ! -d "$PASS_STORE" ]; then
-        log "initierar pass-lösenordslager"
+        log "initializing the pass secret store"
         pass init "$KEY_NAME" >/dev/null
     fi
 }
 
 start_forwarders() {
-    # Bridge binder ALLTID till 127.0.0.1 (hårdkodat). socat måste
-    # lyssna på ANDRA portnummer än Bridges egna (143/25, inte
-    # 1143/1025) — annars kolliderar socats "alla interface"-bindning
-    # (0.0.0.0:PORT) med Bridges 127.0.0.1:PORT för samma portnummer
-    # och en av dem hinner aldrig binda ("address already in use").
+    # Bridge ALWAYS binds to 127.0.0.1 (hardcoded). socat must
+    # listen on DIFFERENT port numbers than Bridge's own (143/25,
+    # not 1143/1025) — otherwise socat's "all interfaces" binding
+    # (0.0.0.0:PORT) collides with Bridge's 127.0.0.1:PORT for the
+    # same port number and one of them never manages to bind
+    # ("address already in use").
     if ! command -v socat >/dev/null 2>&1; then
-        log "FEL: socat saknas i imagen — IMAP/SMTP kan inte nås utifrån. Avbryter."
+        log "ERROR: socat is missing from the image — IMAP/SMTP can't be reached from outside. Aborting."
         exit 1
     fi
     socat TCP-LISTEN:143,fork,reuseaddr TCP:127.0.0.1:1143 &
@@ -60,26 +61,26 @@ start_forwarders() {
 case "${1:-}" in
     init)
         ensure_keychain
-        log "interaktivt Bridge-CLI. Kör: login  (följ prompten)"
-        log "sedan: info   (visar Bridge-lösenordet -> .env som IMAP_PASS)"
-        log "sedan: exit"
+        log "interactive Bridge CLI. Run: login  (follow the prompt)"
+        log "then: info   (shows the Bridge password -> .env as IMAP_PASS)"
+        log "then: exit"
         exec protonmail-bridge --cli
         ;;
     *)
         if ! has_keychain; then
-            log "FEL: inget lösenordslager hittat i volymen."
-            log "Kör engångskonfigen först: docker compose run --rm -it bridge init"
+            log "ERROR: no secret store found in the volume."
+            log "Run the one-time setup first: docker compose run --rm -it bridge init"
             exit 1
         fi
         start_forwarders
-        # Håller Bridge-CLI:t (som bara är interaktivt) vid liv som
-        # daemon utan att någon är ansluten: en FIFO öppnad read+write
-        # på samma fd ger aldrig EOF på stdin.
+        # Keeps the Bridge CLI (which is interactive-only) alive as a
+        # daemon with nobody attached: a FIFO opened read+write on
+        # the same fd never gets EOF on stdin.
         FIFO="$(mktemp -u)"
         mkfifo "$FIFO"
         exec 3<>"$FIFO"
         rm -f "$FIFO"
-        log "startar Proton Bridge i daemon-läge"
+        log "starting Proton Bridge in daemon mode"
         exec protonmail-bridge --cli <&3
         ;;
 esac

@@ -35,30 +35,30 @@ class Processor:
         self._imap = imap
 
     def process(self, uidvalidity: int, uid: int, raw: bytes) -> None:
-        """Bearbetar ETT meddelande. Kastar vidare vid fel så att anroparen
-        kan logga och låta bli att markera UID:t som importerat (försök igen
-        nästa körning). Markerar 'klart' i SQLite först när både bilagor och
-        anteckning ligger på plats."""
+        """Processes ONE message. Re-raises on failure so the caller can log
+        it and leave the UID unmarked as imported (retry next run). Only
+        marks it "done" in SQLite once both the attachments and the note are
+        in place."""
         parsed = parse_email(raw)
 
         note_name = note_filename(parsed.date, parsed.subject, parsed.message_id)
         note_path = f"{self._cfg.note_folder}/{note_name}"
 
-        # Deduplicering via Message-ID (täcker ändrad UIDVALIDITY).
+        # Deduplication via Message-ID (covers a changed UIDVALIDITY).
         existing = self._state.note_for_message_id(parsed.message_id)
         if existing is not None:
             log.info(
-                "UID %s: Message-ID redan importerad (%s) — markerar UID som klar",
+                "UID %s: Message-ID already imported (%s) — marking UID as done",
                 uid, existing,
             )
             self._state.mark_imported(uidvalidity, uid, parsed.message_id, existing)
             return
 
-        # Ett mejl kan ha flera Proton-labels samtidigt (Obsidian + Ida
-        # t.ex.) — IMAP visar bara vilken mapp vi råkar ha vald, så vi
-        # söker aktivt igenom alla Labels/*-mappar efter samma Message-ID.
-        # discover_labels() växlar vilken mapp som är vald -> väl tillbaka
-        # den bevakade mappen direkt efteråt innan vi fortsätter.
+        # An email can have several Proton labels at once (Obsidian + Ida,
+        # say) — IMAP only shows which folder we happen to have selected, so
+        # we actively search through all Labels/* folders for the same
+        # Message-ID. discover_labels() switches which folder is selected ->
+        # reselect the watched folder right afterward before continuing.
         proton_labels = self._imap.discover_labels(parsed.message_id)
         self._imap.select()
         labels = list(proton_labels)
@@ -79,23 +79,23 @@ class Processor:
                 )
             )
 
-        # 1. Bilagor FÖRST — om någon misslyckas kastas undantag och
-        #    anteckningen skapas aldrig (UID:t markeras inte som klart).
+        # 1. Attachments FIRST — if any fails, an exception is raised and the
+        #    note is never created (the UID is not marked as done).
         for plan in plans:
             created = self._obs.create_file(plan.vault_path, plan.content, _BINARY_CT)
             log.info(
-                "UID %s: bilaga %r -> %s (%s)",
+                "UID %s: attachment %r -> %s (%s)",
                 uid, plan.original, plan.vault_path,
-                "skapad" if created else "fanns redan",
+                "created" if created else "already existed",
             )
 
-        # 2. Anteckningen som länkar bilagorna.
+        # 2. The note that links the attachments.
         content = build_note(parsed, plans, labels).encode("utf-8")
         created = self._obs.create_file(note_path, content, _MARKDOWN_CT)
         log.info(
-            "UID %s: anteckning %s -> %s",
-            uid, "skapad" if created else "fanns redan", note_path,
+            "UID %s: note %s -> %s",
+            uid, "created" if created else "already existed", note_path,
         )
 
-        # 3. Klart — atomisk commit i samma SQLite-transaktion.
+        # 3. Done — atomic commit in the same SQLite transaction.
         self._state.mark_imported(uidvalidity, uid, parsed.message_id, note_path)

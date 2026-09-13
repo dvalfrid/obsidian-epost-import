@@ -1,12 +1,12 @@
-%echo Genererar GPG-nyckel för Proton Bridges lokala lösenordslager (pass)
+%echo Generating GPG key for Proton Bridge's local secret store (pass)
 Key-Type: RSA
 Key-Length: 3072
 Subkey-Type: RSA
 Subkey-Length: 3072
 Name-Real: Proton Bridge
-Name-Comment: obsidian-epost-import lokalt nyckellager, ingen lösenfras
+Name-Comment: obsidian-epost-import local key store, no passphrase
 Name-Email: bridge@local.invalid
 Expire-Date: 0
 %no-protection
 %commit
-%echo Klar
+%echo Done

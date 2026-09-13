@@ -11,6 +11,6 @@ def setup_logging(level: str = "INFO") -> None:
         datefmt="%Y-%m-%dT%H:%M:%S%z",
         stream=sys.stdout,
     )
-    # Dämpa pratsamma bibliotek.
+    # Quiet down chatty libraries.
     logging.getLogger("imapclient").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
