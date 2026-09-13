@@ -22,6 +22,35 @@ repo's own docker-compose stack, independent of any always-on computer.
 
 ---
 
+## Prerequisites
+
+Needed **either way** (prebuilt images or building from source):
+
+- **Docker Engine + Docker Compose v2** (the `docker compose` command, not
+  the old standalone `docker-compose` v1) — Docker Desktop on Windows/Mac,
+  or Docker Engine + the compose plugin on Linux/NAS (most NAS "Container
+  Manager"/"Docker" packages already include it).
+- **`linux/amd64` only** — a NAS or PC with an Intel/AMD CPU. Published
+  images aren't built for ARM (Raspberry Pi, some ARM-based Synology/QNAP
+  models) — you'd have to add that yourself (see the platform comment in
+  `.github/workflows/ci.yml`).
+- **~2 GB RAM** free and a few GB of disk (the Obsidian base image alone is
+  roughly 1 GB) — see "Resource limits" below for the per-service split.
+- **A Proton account with Bridge access** — Mail Plus, Unlimited, Duo,
+  Family, or Business. Not included in the free plan.
+- **A LiveSync-compatible CouchDB backend** already reachable over HTTPS —
+  this project does not create one for you, see "Bring your own CouchDB /
+  LiveSync backend" right below.
+- **A terminal** (PowerShell or Bash) and a text editor for `.env`.
+- **A modern web browser**, for the one-time Obsidian setup step (Step 1).
+
+Additionally, for **"Run without a dev environment"**: `curl` (already built
+into Windows 10/11, macOS, and most Linux distros).
+
+Additionally, for **"Quick start — from source"**: `git`.
+
+---
+
 ## Bring your own CouchDB / LiveSync backend
 
 This is its **own repo** and its **own docker-compose project**
