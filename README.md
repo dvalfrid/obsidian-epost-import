@@ -22,26 +22,25 @@ repo's own docker-compose stack, independent of any always-on computer.
 
 ---
 
-## Fully independent from `obsidian-nas-sync`
+## Bring your own CouchDB / LiveSync backend
 
 This is its **own repo** and its **own docker-compose project**
-(`name: obsidian-epost-import`). It shares **nothing** with `obsidian-nas-sync`:
+(`name: obsidian-epost-import`) — it doesn't share a network, volumes, or
+containers with anything else on your NAS.
 
-| | obsidian-nas-sync | this project |
-|---|---|---|
-| Compose project | its own | `obsidian-epost-import` |
-| Network | `couchdb-internal` | `epost-import-net` |
-| Volumes | `couchdb-...` | `epost-import-obsidian-config`, `epost-import-bridge-config`, `epost-import-importer-state` |
-| CouchDB access | via internal `cloudflared` container | **like any client**, via `https://obsidian.valfridsson.se` |
+It also doesn't set up CouchDB or a Cloudflare Tunnel for you. The Obsidian
+container just configures the
+[Self-hosted LiveSync](https://github.com/vrtmrz/obsidian-livesync) plugin to
+sync **exactly like a regular client device would** — over HTTPS, against
+whatever CouchDB instance and vault database you already have (or set up
+separately). If you don't have one yet, see the
+[Self-hosted LiveSync docs](https://github.com/vrtmrz/obsidian-livesync) for
+how to run CouchDB, with or without a tunnel; that setup is independent of
+this repo and can be shared across as many vaults and devices as you like.
 
-The Obsidian container here connects to CouchDB **exactly like a regular
-client device** — over the public Cloudflare Tunnel URL, with the LiveSync
-plugin configured against `vault-daniel`. There is **no** internal Docker
-network to the other project's `couchdb` container, and **no** changes are
-needed in `obsidian-nas-sync` for this to work.
-
-> `obsidian-nas-sync` is only used as a reference for the LiveSync URL/DB
-> name; nothing there is touched by this project.
+> The URI/username/database shown in Step 1 (`https://obsidian.valfridsson.se`,
+> `vault-daniel`) are the author's own values, used as a concrete example —
+> substitute your own.
 
 ---
 
@@ -250,7 +249,8 @@ Login: `OBSIDIAN_WEB_USER` / `OBSIDIAN_WEB_PASSWORD` from `.env`.
 1. **Settings → Community plugins → Browse** → search for **Self-hosted
    LiveSync** → install + enable (if not already present).
 2. **LiveSync settings → Setup → "Open setup wizard" → "Set up manually"**.
-3. Fill in (the same as any regular device would use):
+3. Fill in your own CouchDB details (the same as any regular device would
+   use — the values below are the author's own, shown as an example):
 
    | Field | Value |
    |---|---|
@@ -562,7 +562,7 @@ never starve CouchDB, Cloudflared, or anything else on the NAS.
 ## Robustness & self-healing on NAS reboot/power loss
 
 Goal: after a power outage or NAS reboot, the whole stack should come back up
-on its own, just like `obsidian-nas-sync`. Here's how that holds together:
+on its own, with no manual steps. Here's how that holds together:
 
 ### What's already robust by design
 
@@ -620,8 +620,8 @@ This is controlled by the NAS, not by this repo: make sure **Container
 Manager/Docker is set to start automatically at boot** in TOS (otherwise
 none of the above kicks in after a power outage). In TOS:
 **Container Manager → Settings → "Enable at startup"** (the exact name may
-vary between TOS versions). This is the same prerequisite
-`obsidian-nas-sync` already relies on.
+vary between TOS versions). Any other self-hosted Docker service on the same
+NAS relies on the same setting.
 
 ### Test it yourself
 
