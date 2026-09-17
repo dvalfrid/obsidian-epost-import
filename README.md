@@ -532,6 +532,22 @@ docker compose restart mail-importer
 docker compose stop                     # graceful (SIGTERM)
 ```
 
+- **`docker: 'compose' is not a docker command'` (TerraMaster TNAS and some
+  other NAS Docker packages)**: the engine is installed but the Compose v2
+  CLI plugin isn't. Install it manually:
+  ```bash
+  mkdir -p ~/.docker/cli-plugins
+  curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+    -o ~/.docker/cli-plugins/docker-compose
+  chmod +x ~/.docker/cli-plugins/docker-compose
+  docker compose version
+  ```
+  If the NAS's Docker daemon/CLI runs under a different account than your SSH
+  session, check `docker info | grep -i cli-plugins` for the plugin search
+  path and install there instead (e.g.
+  `/usr/libexec/docker/cli-plugins/docker-compose`). Don't fall back to the
+  legacy standalone `docker-compose` (hyphenated) binary — this repo relies
+  on v2 syntax (see Prerequisites above).
 - **`mail-importer` won't start / "waiting for Local REST API"**: the
   obsidian container isn't `healthy` yet. Most common the first time — you
   need to finish Step 1 (open the vault, enable community plugins, configure
