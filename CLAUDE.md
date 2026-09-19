@@ -251,6 +251,14 @@ Unit tests (`mail-importer/tests/`, pytest, run in CI): `.venv/Scripts/python
 `emailmsg.py`/`note_builder.py`/`remote_fetch.py` — no real IMAP/Obsidian
 server needed.
 
+Adding a fixture from a real email: use the `/add-email-fixture
+<path-to-.eml>` command (`.claude/commands/add-email-fixture.md`) — it
+anonymizes a real exported `.eml` (this repo is public), drops it in
+`mail-importer/tests/fixtures/`, and writes a dedicated test with
+assertions derived from the actual parser output. Don't hand-write
+fixtures/assertions for real emails outside that flow — the anonymization
+steps there are load-bearing.
+
 Quick regression test of the HTML→Markdown handling (tables, labels) without
 a real IMAP server: call `parse_email()` directly on a hand-built `.eml`
 (build a multipart/mixed message with `email.message.EmailMessage`) — see
