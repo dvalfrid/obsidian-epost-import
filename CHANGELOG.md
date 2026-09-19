@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/dvalfrid/obsidian-epost-import/compare/v0.1.0...v0.2.0) (2026-09-19)
+
+
+### Features
+
+* download remote email images/documents into the vault ([abcce6e](https://github.com/dvalfrid/obsidian-epost-import/commit/abcce6eccc2bccdeafffce813bd98905c6ed8879))
+
+
+### Bug Fixes
+
+* tag releases without the component-name prefix ([076f521](https://github.com/dvalfrid/obsidian-epost-import/commit/076f521bce3875b01bccadb8de2c022c374afaab))
+
 ## 0.1.0 (2026-09-13)
 
 
