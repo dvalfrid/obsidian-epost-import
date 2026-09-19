@@ -114,9 +114,10 @@ volume — no new login is needed after that, not even after a NAS reboot.
 | `app.py` | `Runner`: main loop, IMAP IDLE + poll, signal handling, backoff, heartbeat |
 | `imap_source.py` | IMAPClient wrapper. Read-only select, `BODY.PEEK[]`, IDLE, `discover_labels()` (searches `Labels/*` for the same Message-ID). `NETWORK_ERRORS` |
 | `emailmsg.py` | `parse_email()` → `ParsedEmail` (+ `Attachment`). HTML→MD via markdownify. `_is_layout_table()`/`_unwrap_layout_tables()` unwrap layout tables |
-| `note_builder.py` | Filename, frontmatter, note content, `cid:` rewriting |
+| `note_builder.py` | Filename, frontmatter, note content, `cid:` + remote-URL rewriting |
 | `obsidian_api.py` | `ObsidianClient`: create-only `PUT` (existence check first), retries on network/5xx |
-| `processor.py` | `Processor.process()`: label discovery → attachments → note → `mark_imported()` |
+| `remote_fetch.py` | Best-effort download of remote `http(s)` images/documents linked in email bodies, SSRF-guarded |
+| `processor.py` | `Processor.process()`: label discovery → attachments → remote resources → note → `mark_imported()` |
 | `state.py` | SQLite: `imported(uidvalidity,uid,message_id,note_path,imported_at)` + `mailbox_meta` |
 | `healthcheck.py` | Docker HEALTHCHECK — checks the heartbeat file's age |
 | `__main__.py` | Dispatch: `run` (default), `list-folders`, `healthcheck` |
@@ -162,6 +163,20 @@ volume — no new login is needed after that, not even after a NAS reboot.
   were tried and are known-broken, don't reintroduce them: "single cell per
   row = layout" (misses wide layout tables with no header) and wrapping
   every cell in `<p>` unconditionally (breaks on nested tables, see above).
+- **Remote resources (images/documents linked from email bodies):**
+  best-effort downloaded into the vault as normal attachments (`remote_fetch.py`,
+  keyed by `sha1(url)` so the same resource across emails dedupes for free)
+  so they survive if the sender's server later disappears. The original
+  remote URL is always kept — as the local embed's alt text
+  (`![[path|url]]`) on success, or as the untouched original Markdown link
+  on any failure (blocked host, timeout, oversized, bad status) — never as
+  an error path that blocks the rest of the import. `_is_public_host()`
+  rejects private/loopback/link-local/reserved resolved IPs before
+  requesting — this container can reach `obsidian:27124` internally, and
+  the URL comes from externally-received, attacker-influenceable email
+  content, so this is a real SSRF guard, not defensive boilerplate. Don't
+  follow redirects (`allow_redirects=False`) — a redirect is treated as a
+  failure rather than re-validated per hop.
 - The init script (obsidian) and the entrypoint (bridge) must be idempotent.
   The bridge entrypoint should refuse to start with a clear error rather
   than silently degrade (e.g. an unencrypted secret store).
@@ -226,10 +241,17 @@ volume — no new login is needed after that, not even after a NAS reboot.
 
 ```bash
 cd mail-importer
-python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
 PYTHONPATH=. .venv/Scripts/python -m mailimporter list-folders   # needs real .env values in the environment
 ```
 
+Unit tests (`mail-importer/tests/`, pytest, run in CI): `.venv/Scripts/python
+-m pytest -q` from `mail-importer/` (`pytest.ini` sets `pythonpath = .` so
+`mailimporter` resolves without exporting `PYTHONPATH` manually). Covers
+`emailmsg.py`/`note_builder.py`/`remote_fetch.py` — no real IMAP/Obsidian
+server needed.
+
 Quick regression test of the HTML→Markdown handling (tables, labels) without
 a real IMAP server: call `parse_email()` directly on a hand-built `.eml`
-(build a multipart/mixed message with `email.message.EmailMessage`).
+(build a multipart/mixed message with `email.message.EmailMessage`) — see
+`tests/test_integration_remote_resources.py` for the pattern.

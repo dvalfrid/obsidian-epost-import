@@ -15,6 +15,7 @@ class _AttachmentLike(Protocol):
     original: str
     vault_path: str
     content_id: str | None
+    source_url: str | None
 
 
 def short_hash(message_id: str, length: int = 10) -> str:
@@ -69,6 +70,32 @@ def _rewrite_cids(body: str, attachments: Iterable[_AttachmentLike]) -> str:
     return body
 
 
+def _rewrite_remote_urls(body: str, attachments: Iterable[_AttachmentLike]) -> str:
+    """Points remote http(s) images/links at their downloaded local copy
+    (see remote_fetch.py), while keeping the original URL visible as the
+    embed's alt text / the wikilink's display text."""
+    for att in attachments:
+        if not att.source_url:
+            continue
+        url = att.source_url
+        alias = f"{att.vault_path}|{url}"
+        if _is_image(att.vault_path):
+            body = re.sub(
+                r"!\[[^\]]*\]\(\s*" + re.escape(url) + r"\s*\)",
+                f"![[{alias}]]",
+                body,
+                flags=re.IGNORECASE,
+            )
+        else:
+            body = re.sub(
+                r"(?<!!)\[[^\]]*\]\(\s*" + re.escape(url) + r"\s*\)",
+                f"[[{alias}]]",
+                body,
+                flags=re.IGNORECASE,
+            )
+    return body
+
+
 def build_note(
     parsed,
     attachments: list[_AttachmentLike],
@@ -111,7 +138,9 @@ def build_note(
 
     lines.append("---")
     lines.append("")
-    lines.append(_rewrite_cids(parsed.body_markdown, attachments))
+    body = _rewrite_cids(parsed.body_markdown, attachments)
+    body = _rewrite_remote_urls(body, attachments)
+    lines.append(body)
     lines.append("")
 
     return "\n".join(lines)

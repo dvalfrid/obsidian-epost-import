@@ -476,6 +476,16 @@ set in the compose file) resolves the name to the Docker host.
   therefore only treated as **real data** (becomes an actual Markdown table)
   if it has **`<th>` header cells** and isn't marked `role="presentation"` —
   otherwise it's unwrapped into plain paragraphs/lines.
+- **Remote images/documents:** emails often link to remote resources instead
+  of embedding them (`<img src="https://...">`, links to PDFs/Word docs,
+  etc.) — if the sender's server later disappears, the note would lose them.
+  The importer best-effort downloads remote `http(s)` images and links to
+  known document types (PDF, Word, Excel, PowerPoint, ODF, RTF, CSV, ZIP)
+  and re-hosts them as normal vault attachments, rewriting the note to embed
+  the local copy with the **original URL kept as its alt text** (images) or
+  display text (documents). On any failure (host blocked, timeout, too
+  large, non-2xx status) the original remote link is left untouched — it
+  never affects the rest of the import. Disable with `REMOTE_FETCH_ENABLED=false`.
 - **Error handling:** a failed Local REST API call → logged, the UID is
   **not** marked (retried next run), the queue continues with the rest.
   Retries with **exponential backoff, max 3 attempts** against both IMAP and
@@ -504,6 +514,9 @@ See **`.env.example`** for the full list with comments. The most important:
 | `OBSIDIAN_API_VERIFY_TLS` | `false` | Self-signed cert |
 | `NOTE_FOLDER` / `ATTACHMENT_FOLDER` | `Email` / `Email/attachments` | Destination in the vault |
 | `NOTE_LABELS` | `Obsidian` | Comma-separated, added **on top of** the real Proton labels discovered per email |
+| `REMOTE_FETCH_ENABLED` | `true` | Download remote images/documents linked from email bodies into the vault |
+| `REMOTE_FETCH_MAX_BYTES` | `26214400` | Max size (bytes) per downloaded remote resource |
+| `REMOTE_FETCH_TIMEOUT_SECONDS` | `20` | Timeout per remote download |
 | `POLL_INTERVAL_SECONDS` | `300` | Safety-net poll |
 | `IDLE_TIMEOUT_SECONDS` | `60` | IDLE wait time / shutdown responsiveness |
 | `RECONNECT_BACKOFF_MAX_SECONDS` | `300` | Max backoff on network errors |

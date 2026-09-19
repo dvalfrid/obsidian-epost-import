@@ -3,11 +3,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import requests
+
 from .config import Config
 from .emailmsg import parse_email
 from .imap_source import ImapSource
 from .note_builder import attachment_filename, build_note, note_filename
 from .obsidian_api import ObsidianClient
+from .remote_fetch import extract_remote_resources, fetch_remote, remote_filename
 from .state import State
 
 log = logging.getLogger("processor")
@@ -23,6 +26,7 @@ class _AttachmentPlan:
     content_id: str | None
     content: bytes
     content_type: str
+    source_url: str | None = None
 
 
 class Processor:
@@ -33,6 +37,7 @@ class Processor:
         self._state = state
         self._cfg = cfg
         self._imap = imap
+        self._http = requests.Session()
 
     def process(self, uidvalidity: int, uid: int, raw: bytes) -> None:
         """Processes ONE message. Re-raises on failure so the caller can log
@@ -78,6 +83,28 @@ class Processor:
                     content_type=att.content_type,
                 )
             )
+
+        # Best-effort: download remote http(s) images/documents referenced
+        # in the body so they survive if the sender's server later goes
+        # away. Failures (blocked host, timeout, too large, bad status) are
+        # skipped silently — the original remote link is left in place.
+        if self._cfg.remote_fetch_enabled:
+            for resource in extract_remote_resources(parsed.body_markdown):
+                fetched = fetch_remote(resource.url, self._cfg, self._http)
+                if fetched is None:
+                    continue
+                content, content_type = fetched
+                fname = remote_filename(resource.url, content_type)
+                plans.append(
+                    _AttachmentPlan(
+                        original=resource.url,
+                        vault_path=f"{self._cfg.attachment_folder}/{fname}",
+                        content_id=None,
+                        content=content,
+                        content_type=content_type,
+                        source_url=resource.url,
+                    )
+                )
 
         # 1. Attachments FIRST — if any fails, an exception is raised and the
         #    note is never created (the UID is not marked as done).

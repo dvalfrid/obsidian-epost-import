@@ -50,6 +50,11 @@ class Config:
     attachment_folder: str
     note_labels: list[str]
 
+    # Remote resource fetching (images/documents linked from email bodies)
+    remote_fetch_enabled: bool
+    remote_fetch_max_bytes: int
+    remote_fetch_timeout: int
+
     # Runtime
     poll_interval: int
     idle_timeout: int
@@ -79,6 +84,9 @@ class Config:
             note_folder=_str("NOTE_FOLDER", "Email").strip("/"),
             attachment_folder=_str("ATTACHMENT_FOLDER", "Email/attachments").strip("/"),
             note_labels=labels or ["Obsidian"],
+            remote_fetch_enabled=_bool("REMOTE_FETCH_ENABLED", True),
+            remote_fetch_max_bytes=_int("REMOTE_FETCH_MAX_BYTES", 26214400),
+            remote_fetch_timeout=_int("REMOTE_FETCH_TIMEOUT_SECONDS", 20),
             poll_interval=_int("POLL_INTERVAL_SECONDS", 300),
             idle_timeout=_int("IDLE_TIMEOUT_SECONDS", 60),
             reconnect_backoff_max=_int("RECONNECT_BACKOFF_MAX_SECONDS", 300),

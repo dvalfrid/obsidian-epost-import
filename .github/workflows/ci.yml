@@ -22,10 +22,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install mail-importer dependencies
-        run: pip install -r mail-importer/requirements.txt
+        run: pip install -r mail-importer/requirements-dev.txt
 
       - name: Python syntax check
         run: python -m py_compile mail-importer/mailimporter/*.py
+
+      - name: Python unit tests
+        run: python -m pytest -q
+        working-directory: mail-importer
 
       - name: Shell syntax check (bridge entrypoint)
         run: sh -n bridge/entrypoint.sh
